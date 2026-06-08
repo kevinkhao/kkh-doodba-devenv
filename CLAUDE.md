@@ -21,6 +21,28 @@ itself with the label
 
 ---
 
+## First-time setup after cloning
+
+Two gitignored files are required and must be created once after a fresh clone:
+
+```bash
+# 1. Symlink docker-compose.yml to the dev environment definition
+ln -s devel.yaml docker-compose.yml
+
+# 2. Create the override that keeps the container alive (Odoo is started manually)
+cat > docker-compose.override.yml << 'EOF'
+services:
+  odoo:
+    command:
+      - sleep
+      - infinity
+EOF
+```
+
+Then proceed with cloning the Odoo source and building the image (see below).
+
+---
+
 ## Prerequisites — Odoo source code
 
 `PIP_INSTALL_ODOO` is `false`, meaning the image expects the Odoo source tree at:
@@ -76,37 +98,37 @@ from its own location.
 
 ```bash
 # Start Odoo with default dev flags
-python odoo-cli.py start
+python3 odoo-cli.py start
 
 # Start against a specific database
-python odoo-cli.py start -d myproject
+python3 odoo-cli.py start -d myproject
 
 # Start and install modules at first launch
-python odoo-cli.py start -d myproject -i sale,purchase,my_module
+python3 odoo-cli.py start -d myproject -i sale,purchase,my_module
 
 # Restart and update a module after code changes
-python odoo-cli.py restart -d myproject -u my_module
+python3 odoo-cli.py restart -d myproject -u my_module
 
 # Stop Odoo
-python odoo-cli.py stop
+python3 odoo-cli.py stop
 
 # Check container and process status
-python odoo-cli.py status
+python3 odoo-cli.py status
 
 # Stream live Odoo logs
-python odoo-cli.py logs --follow
+python3 odoo-cli.py logs --follow
 
 # Show last 50 log lines
-python odoo-cli.py logs -n 50
+python3 odoo-cli.py logs -n 50
 
 # Install a Python package on the fly (ephemeral — lost on container recreate)
-python odoo-cli.py pip pandas xlrd reportlab
+python3 odoo-cli.py pip pandas xlrd reportlab
 
 # Open an interactive Odoo Python REPL
-python odoo-cli.py shell -d myproject
+python3 odoo-cli.py shell -d myproject
 
 # Run an arbitrary command inside the container
-python odoo-cli.py exec -- bash -c "pip list | grep odoo"
+python3 odoo-cli.py exec -- bash -c "pip list | grep odoo"
 ```
 
 ### Default Odoo flags applied on every `start`
@@ -168,7 +190,7 @@ From inside the shell you can:
 ### On the fly (ephemeral)
 
 ```bash
-python odoo-cli.py pip <package>
+python3 odoo-cli.py pip <package>
 # or from inside the container:
 pip install <package>
 ```
@@ -198,7 +220,7 @@ That directory is mounted read-only into the container at
 `/opt/odoo/custom/src/private/`. After adding a new module, restart Odoo and install it:
 
 ```bash
-python odoo-cli.py restart -d myproject -i my_module
+python3 odoo-cli.py restart -d myproject -i my_module
 ```
 
 Because `--dev=reload` is active, Python file changes inside existing modules are picked
@@ -251,13 +273,13 @@ One file per project. The filename is free-form (used only for organisation).
 
 ```bash
 # Preview — no filesystem changes
-python odoo-cli.py link-modules --dry-run
+python3 odoo-cli.py link-modules --dry-run
 
 # Create/update symlinks in odoo/custom/src/private/
-python odoo-cli.py link-modules
+python3 odoo-cli.py link-modules
 
 # Also remove symlinks whose entries were deleted from addons.txt
-python odoo-cli.py link-modules --clean
+python3 odoo-cli.py link-modules --clean
 ```
 
 After running, `src/private/` contains:
@@ -288,7 +310,7 @@ step.
 After linking, tell Odoo to install it:
 
 ```bash
-python odoo-cli.py restart -d myproject -i account_ext
+python3 odoo-cli.py restart -d myproject -i account_ext
 ```
 
 ---

@@ -167,10 +167,13 @@ def cmd_shell(args):
 
 def cmd_exec(args):
     """Run an arbitrary command inside the container."""
-    if not args.cmd:
+    # argparse REMAINDER includes the '--' separator; strip it so it isn't
+    # forwarded to the OCI runtime as a literal executable name.
+    cmd = args.cmd[1:] if args.cmd and args.cmd[0] == "--" else args.cmd
+    if not cmd:
         print("ERROR: Provide a command to run.", file=sys.stderr)
         sys.exit(1)
-    _exec(args.cmd, interactive=sys.stdin.isatty())
+    _exec(cmd, interactive=sys.stdin.isatty())
 
 
 def _rel(path):
