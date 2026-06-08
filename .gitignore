@@ -3,6 +3,17 @@
 /odoo/custom/src/*/
 !/odoo/custom/src/private/
 
+# Generated symlinks in src/private/ — recreated by `link-modules` command
+/odoo/custom/src/private/*
+!/odoo/custom/src/private/.gitkeep
+
+# Extra-addons project directories — external repos, never committed here
+/odoo/custom/extra-addons/*/
+!/odoo/custom/extra-addons/.gitkeep
+
+# Claude Code local configuration and worktrees
+/.claude/
+
 # Ignore docker-compose.yml and overrides by default, to allow easy defaults per clone
 /docker-compose.yml
 /docker-compose.override.yml

@@ -1,0 +1,23 @@
+# container_configs/EXAMPLE.txt
+#
+# Two sections are supported. Both are optional.
+#
+# [addons]
+#   Each line is a container directory (relative to project root).
+#   All immediate subdirectories are symlinked into src/private/ as Odoo modules.
+#
+# [requirements]
+#   Each line is a path to a requirements.txt (relative to project root).
+#   `workon` runs `pip install -r` for each one inside the container.
+#   Paths must live under odoo/custom/ (the mounted volume).
+#
+# Usage:
+#   python3 odoo-cli.py workon EXAMPLE
+#   python3 odoo-cli.py link-modules
+
+# [addons]
+# odoo/custom/extra-addons/my_project/core
+# odoo/custom/extra-addons/my_project/sales
+#
+# [requirements]
+# odoo/custom/extra-addons/my_project/requirements.txt

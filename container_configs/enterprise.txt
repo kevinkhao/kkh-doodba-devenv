@@ -1,0 +1,4 @@
+[addons]
+odoo/custom/extra-addons/enterprise
+[requirements]
+odoo/custom/extra-addons/enterprise/requirements.txt

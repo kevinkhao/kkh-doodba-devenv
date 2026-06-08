@@ -1,9 +1,0 @@
-# One module path per line, relative to the project root (18.0-doodba/).
-# Blank lines and lines starting with # are ignored.
-#
-# Usage:
-#   python3 odoo-cli.py workon EXAMPLE
-#   python3 odoo-cli.py link-modules
-#
-# odoo/custom/extra-addons/my_project/core/account_ext
-# odoo/custom/extra-addons/my_project/sales/crm_custom

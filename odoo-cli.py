@@ -31,6 +31,10 @@ PID_FILE = "/tmp/odoo.pid"
 # at ./odoo/auto/odoo.log
 LOG_FILE = "/opt/odoo/auto/odoo.log"
 
+# Volume mount: PROJECT_DIR/odoo/custom → /opt/odoo/custom inside the container
+HOST_CUSTOM = pathlib.Path(PROJECT_DIR) / "odoo" / "custom"
+CONTAINER_CUSTOM = "/opt/odoo/custom"
+
 DEFAULT_FLAGS = [
     "--workers=0",
     "--dev=reload,qweb,werkzeug,xml",
@@ -181,30 +185,89 @@ def _rel(path):
     return pathlib.Path(path).relative_to(PROJECT_DIR)
 
 
+def _parse_config(config_file):
+    """Parse a container config .txt file into {section: [lines]}.
+
+    Section headers are [addons] and [requirements]. Lines before the first
+    header are treated as belonging to [addons] for backward compatibility.
+    Comments and blank lines are ignored everywhere.
+    """
+    sections: dict[str, list[str]] = {"addons": [], "requirements": []}
+    current = "addons"
+    for raw in config_file.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1].lower()
+            if current not in sections:
+                sections[current] = []
+        else:
+            sections[current].append(line)
+    return sections
+
+
 def _collect_desired(config_files):
-    """Return ({name: module_path}, error_count) from an iterable of .txt files."""
+    """Return ({name: module_path}, error_count) from an iterable of .txt files.
+
+    Each line in the [addons] section is a container directory; all immediate
+    subdirectories of that container are candidates for linking.
+    """
     desired: dict[str, pathlib.Path] = {}
     errors = 0
     for addons_file in config_files:
-        for raw in addons_file.read_text().splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            module_path = (pathlib.Path(PROJECT_DIR) / line).resolve()
-            if not module_path.exists():
-                src = _rel(addons_file)
-                print(f"  MISSING  {module_path}  (from {src})")
+        src = _rel(addons_file)
+        for line in _parse_config(addons_file)["addons"]:
+            container_path = (pathlib.Path(PROJECT_DIR) / line).resolve()
+            if not container_path.exists():
+                print(f"  MISSING  {container_path}  (from {src})")
                 errors += 1
                 continue
-            name = module_path.name
-            if name in desired:
-                if desired[name] != module_path:
-                    a, b = _rel(module_path), _rel(desired[name])
-                    print(f"  CONFLICT {name}: {a} vs {b} — skipping")
-                    errors += 1
+            if not container_path.is_dir():
+                print(f"  NOT_DIR  {container_path}  (from {src})")
+                errors += 1
                 continue
-            desired[name] = module_path
+            for module_path in sorted(container_path.iterdir()):
+                if not module_path.is_dir():
+                    continue
+                name = module_path.name
+                if name in desired:
+                    if desired[name] != module_path:
+                        a, b = _rel(module_path), _rel(desired[name])
+                        print(f"  CONFLICT {name}: {a} vs {b} — skipping")
+                        errors += 1
+                    continue
+                desired[name] = module_path
     return desired, errors
+
+
+def _collect_requirements(config_files):
+    """Return ([container_paths], error_count) for [requirements] entries.
+
+    Paths are given relative to PROJECT_DIR and must live under odoo/custom/
+    so they can be translated to the equivalent container path.
+    """
+    req_paths: list[str] = []
+    errors = 0
+    for addons_file in config_files:
+        src = _rel(addons_file)
+        for line in _parse_config(addons_file)["requirements"]:
+            host_path = (pathlib.Path(PROJECT_DIR) / line).resolve()
+            if not host_path.exists():
+                print(f"  MISSING  {host_path}  (from {src})")
+                errors += 1
+                continue
+            try:
+                rel = host_path.relative_to(HOST_CUSTOM)
+            except ValueError:
+                print(
+                    f"  OUT_OF_MOUNT  {host_path} is not under"
+                    f" odoo/custom/  (from {src})"
+                )
+                errors += 1
+                continue
+            req_paths.append(f"{CONTAINER_CUSTOM}/{rel}")
+    return req_paths, errors
 
 
 def _apply_symlinks(desired, private_dir, dry_run):
@@ -256,16 +319,16 @@ def _clean_stale(desired, private_dir, dry_run):
 
 def cmd_link_modules(args):
     """
-    Read all *.txt files in addons_paths/, resolve the listed module paths
-    (relative to the project root), and create relative symlinks in
+    Read all *.txt files in container_configs/, expand each listed directory into
+    its immediate subdirectories, and create relative symlinks in
     odoo/custom/src/private/.
 
-    addons_paths/<project>.txt format (paths relative to project root):
-        # comment
-        odoo/custom/extra-addons/my_project/core/account_ext
-        odoo/custom/extra-addons/my_project/sales/crm_custom
+    container_configs/<project>.txt format (paths relative to project root):
+        # comment — each line is a container directory, not a single module
+        odoo/custom/extra-addons/my_project/core
+        odoo/custom/extra-addons/my_project/sales
     """
-    addons_paths_dir = pathlib.Path(PROJECT_DIR) / "addons_paths"
+    addons_paths_dir = pathlib.Path(PROJECT_DIR) / "container_configs"
     private_dir = pathlib.Path(PROJECT_DIR) / "odoo" / "custom" / "src" / "private"
 
     if not addons_paths_dir.is_dir():
@@ -297,12 +360,12 @@ def cmd_link_modules(args):
 def cmd_workon(args):
     """Link a project's modules and open an interactive shell in the container."""
     project = args.project
-    addons_paths_dir = pathlib.Path(PROJECT_DIR) / "addons_paths"
+    addons_paths_dir = pathlib.Path(PROJECT_DIR) / "container_configs"
     private_dir = pathlib.Path(PROJECT_DIR) / "odoo" / "custom" / "src" / "private"
 
     addons_file = addons_paths_dir / f"{project}.txt"
     if not addons_file.exists():
-        print(f"ERROR: addons_paths/{project}.txt not found.", file=sys.stderr)
+        print(f"ERROR: container_configs/{project}.txt not found.", file=sys.stderr)
         available = sorted(
             f.stem
             for f in addons_paths_dir.iterdir()
@@ -324,9 +387,19 @@ def cmd_workon(args):
     if errors:
         sys.exit(1)
 
+    req_paths, err_req = _collect_requirements([addons_file])
+    if err_req:
+        sys.exit(1)
+
     if not _container_running():
         print("Starting containers...")
         subprocess.run(COMPOSE + ["up", "-d"], check=True)
+
+    if req_paths:
+        print("Installing requirements...")
+        for req in req_paths:
+            print(f"  pip install -r {req}")
+            _exec(["pip", "install", "--no-cache-dir", "-r", req])
 
     _exec(["bash"], interactive=True)
 
@@ -449,14 +522,14 @@ examples:
         "workon",
         help="Link a project's modules and open a shell in the container",
         description=(
-            "Reads addons_paths/PROJECT.txt, creates symlinks in src/private/, "
+            "Reads container_configs/PROJECT.txt, creates symlinks in src/private/, "
             "starts the containers if needed, then opens an interactive bash shell."
         ),
     )
     p.add_argument(
         "project",
         metavar="PROJECT",
-        help="Project name (reads addons_paths/PROJECT.txt)",
+        help="Project name (reads container_configs/PROJECT.txt)",
     )
     p.set_defaults(func=cmd_workon)
 
@@ -465,8 +538,8 @@ examples:
         "link-modules",
         help="Generate symlinks in src/private/ from extra-addons/*/addons.txt",
         description=(
-            "Walks odoo/custom/extra-addons/ for addons.txt files, resolves the "
-            "listed module paths, and creates relative symlinks in "
+            "Reads *.txt files in container_configs/, expands each listed directory "
+            "into its immediate subdirectories, and creates relative symlinks in "
             "odoo/custom/src/private/ so doodba can find them."
         ),
     )
