@@ -234,8 +234,8 @@ up automatically without a restart. XML/QWeb changes are also hot-reloaded. Chan
 Modules can be organised in an arbitrary directory tree under
 `odoo/custom/extra-addons/`. Each project declares which of its directories are Odoo
 modules by adding a `*.txt` file to the top-level `container_configs/` directory. The
-`link-modules` command turns those declarations into symlinks inside `src/private/`,
-where doodba picks them up automatically.
+`link-modules` command turns those declarations into symlinks inside
+`odoo/auto/addons/`, where doodba picks them up alongside the community modules.
 
 ### Directory structure
 
@@ -273,7 +273,7 @@ odoo/custom/extra-addons/my_project/requirements.txt
 ```
 
 **`[addons]`** — each line is a **container directory** (path relative to project root).
-All immediate subdirectories are symlinked into `src/private/` as Odoo modules.
+All immediate subdirectories are symlinked into `odoo/auto/addons/` as Odoo modules.
 Non-directory entries are skipped automatically.
 
 **`[requirements]`** — each line is a path to a `requirements.txt` (relative to project
@@ -288,22 +288,23 @@ One file per project. The filename is free-form (used only for organisation).
 # Preview — no filesystem changes
 python3 odoo-cli.py link-modules --dry-run
 
-# Create/update symlinks in odoo/custom/src/private/
+# Create/update symlinks in odoo/auto/addons/
 python3 odoo-cli.py link-modules
 
-# Also remove symlinks whose entries were deleted from addons.txt
+# Also remove our symlinks whose entries were deleted from container_configs/
+# (leaves doodba-managed community module links untouched)
 python3 odoo-cli.py link-modules --clean
 ```
 
-After running, `src/private/` contains:
+After running, `odoo/auto/addons/` contains (alongside the community module links):
 
 ```
-account_ext  →  ../../extra-addons/my_project/core/account_ext
-crm_custom   →  ../../extra-addons/my_project/sales/crm_custom
+account_ext  →  ../../custom/extra-addons/my_project/core/account_ext
+crm_custom   →  ../../custom/extra-addons/my_project/sales/crm_custom
 ```
 
-The relative targets resolve identically on the host and inside the container because
-both directories live under the same volume mount (`./odoo/custom`).
+`odoo/auto/` is gitignored — the symlinks are runtime state recreated by `link-modules`
+or `workon`.
 
 ### When to re-run
 
@@ -313,10 +314,8 @@ Re-run `link-modules` whenever you:
 - Create a new `addons.txt` for a new project
 - Remove or rename an entry (add `--clean` to remove the stale symlink)
 
-The generated symlinks can be committed to git — they are small, and committing them
-makes the project self-contained for other developers. Alternatively, add
-`odoo/custom/src/private/*` to `.gitignore` and run `link-modules` as part of any setup
-step.
+The symlinks live in `odoo/auto/` which is gitignored — run `link-modules` or `workon`
+as part of any setup step after cloning.
 
 ### `workon` — one-shot project setup
 
@@ -330,7 +329,7 @@ It:
 
 1. Reads `container_configs/my_project.txt` (errors if missing, lists available
    projects)
-2. Creates symlinks in `src/private/` for all modules in the `[addons]` section
+2. Creates symlinks in `odoo/auto/addons/` for all modules in the `[addons]` section
 3. Starts the containers (`docker compose up -d`) if they are not already running
 4. Runs `pip install -r` for each path in the `[requirements]` section (if any)
 5. Opens an interactive bash shell inside the odoo container

@@ -35,6 +35,10 @@ LOG_FILE = "/opt/odoo/auto/odoo.log"
 HOST_CUSTOM = pathlib.Path(PROJECT_DIR) / "odoo" / "custom"
 CONTAINER_CUSTOM = "/opt/odoo/custom"
 
+# Where symlinks are placed so doodba picks up custom modules
+SYMLINK_DIR = pathlib.Path(PROJECT_DIR) / "odoo" / "auto" / "addons"
+EXTRA_ADDONS_DIR = pathlib.Path(PROJECT_DIR) / "odoo" / "custom" / "extra-addons"
+
 DEFAULT_FLAGS = [
     "--workers=0",
     "--dev=reload,qweb,werkzeug,xml",
@@ -302,11 +306,19 @@ def _apply_symlinks(desired, private_dir, dry_run):
     return created, skipped, errors
 
 
-def _clean_stale(desired, private_dir, dry_run):
-    """Remove symlinks in *private_dir* not in *desired*. Returns removed count."""
+def _clean_stale(desired, symlink_dir, dry_run):
+    """Remove our symlinks in *symlink_dir* not in *desired*.
+
+    Only touches symlinks whose resolved target is under EXTRA_ADDONS_DIR,
+    leaving doodba-managed links (e.g. community module links) untouched.
+    Returns removed count.
+    """
     removed = 0
-    for link_path in sorted(private_dir.iterdir()):
+    for link_path in sorted(symlink_dir.iterdir()):
         if not link_path.is_symlink() or link_path.name in desired:
+            continue
+        target = (symlink_dir / os.readlink(link_path)).resolve()
+        if not str(target).startswith(str(EXTRA_ADDONS_DIR)):
             continue
         if dry_run:
             print(f"  would remove  {_rel(link_path)}  (stale)")
@@ -321,7 +333,7 @@ def cmd_link_modules(args):
     """
     Read all *.txt files in container_configs/, expand each listed directory into
     its immediate subdirectories, and create relative symlinks in
-    odoo/custom/src/private/.
+    odoo/auto/addons/ so doodba picks them up alongside the community modules.
 
     container_configs/<project>.txt format (paths relative to project root):
         # comment — each line is a container directory, not a single module
@@ -329,12 +341,11 @@ def cmd_link_modules(args):
         odoo/custom/extra-addons/my_project/sales
     """
     addons_paths_dir = pathlib.Path(PROJECT_DIR) / "container_configs"
-    private_dir = pathlib.Path(PROJECT_DIR) / "odoo" / "custom" / "src" / "private"
 
     if not addons_paths_dir.is_dir():
         print(f"ERROR: {addons_paths_dir} does not exist.", file=sys.stderr)
         sys.exit(1)
-    private_dir.mkdir(parents=True, exist_ok=True)
+    SYMLINK_DIR.mkdir(parents=True, exist_ok=True)
 
     config_files = sorted(
         f
@@ -342,8 +353,8 @@ def cmd_link_modules(args):
         if f.is_file() and not f.name.startswith(".")
     )
     desired, err_collect = _collect_desired(config_files)
-    created, skipped, err_apply = _apply_symlinks(desired, private_dir, args.dry_run)
-    removed = _clean_stale(desired, private_dir, args.dry_run) if args.clean else 0
+    created, skipped, err_apply = _apply_symlinks(desired, SYMLINK_DIR, args.dry_run)
+    removed = _clean_stale(desired, SYMLINK_DIR, args.dry_run) if args.clean else 0
 
     errors = err_collect + err_apply
     prefix = "[dry-run] " if args.dry_run else ""
@@ -361,7 +372,6 @@ def cmd_workon(args):
     """Link a project's modules and open an interactive shell in the container."""
     project = args.project
     addons_paths_dir = pathlib.Path(PROJECT_DIR) / "container_configs"
-    private_dir = pathlib.Path(PROJECT_DIR) / "odoo" / "custom" / "src" / "private"
 
     addons_file = addons_paths_dir / f"{project}.txt"
     if not addons_file.exists():
@@ -376,9 +386,9 @@ def cmd_workon(args):
         sys.exit(1)
 
     print(f"Linking modules for '{project}'...")
-    private_dir.mkdir(parents=True, exist_ok=True)
+    SYMLINK_DIR.mkdir(parents=True, exist_ok=True)
     desired, err_collect = _collect_desired([addons_file])
-    created, skipped, err_apply = _apply_symlinks(desired, private_dir, dry_run=False)
+    created, skipped, err_apply = _apply_symlinks(desired, SYMLINK_DIR, dry_run=False)
     errors = err_collect + err_apply
     print(
         f"  {created} linked, {skipped} already up-to-date"
