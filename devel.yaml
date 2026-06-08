@@ -1,0 +1,83 @@
+services:
+  odoo:
+    extends:
+      file: common.yaml
+      service: odoo
+    build:
+      args:
+        AGGREGATE: "false"
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
+        PIP_INSTALL_ODOO: "false"
+        CLEAN: "false"
+        COMPILE: "false"
+    environment:
+      DOODBA_ENVIRONMENT: "devel"
+      INITIAL_LANG: "en_US"
+      LIST_DB: "true"
+      DEBUGPY_ENABLE: "${DOODBA_DEBUGPY_ENABLE:-0}"
+      PGDATABASE: &dbname devel
+      PGPASSWORD: &dbpassword "odoopassword"
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONOPTIMIZE: ""
+      PYTHONPATH: /opt/odoo/custom/src/odoo
+      SMTP_PORT: "1025"
+      WITHOUT_DEMO: "${DOODBA_WITHOUT_DEMO:-false}"
+    volumes:
+      - ./odoo/custom:/opt/odoo/custom:ro,z
+      - ./odoo/auto:/opt/odoo/auto:rw,z
+    depends_on:
+      db:
+        condition: service_healthy
+      smtp:
+        condition: service_started
+    networks:
+      default:
+      traefik:
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.18-0-doodba-odoo.rule: "Host(`odoo-18.localhost`)"
+      traefik.http.services.18-0-doodba-odoo.loadbalancer.server.port: "8069"
+      traefik.docker.network: "traefik"
+    ports:
+      - "127.0.0.1:${PORT_PREFIX:-18}069:8069"
+    command:
+      - odoo
+      - --limit-memory-soft=0
+      - --limit-time-real-cron=9999999
+      - --limit-time-real=9999999
+      - --workers=0
+      - --dev=reload,qweb,werkzeug,xml
+
+  db:
+    extends:
+      file: common.yaml
+      service: db
+    environment:
+      POSTGRES_DB: *dbname
+      POSTGRES_PASSWORD: *dbpassword
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -d $$POSTGRES_DB -U $$POSTGRES_USER"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      default:
+
+  smtp:
+    extends:
+      file: common.yaml
+      service: smtpfake
+    networks:
+      default:
+    ports:
+      - "127.0.0.1:${PORT_PREFIX:-18}025:8025"
+
+networks:
+  default:
+  traefik:
+    external: true
+
+volumes:
+  filestore:
+  db:

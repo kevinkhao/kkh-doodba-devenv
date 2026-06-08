@@ -1,0 +1,32 @@
+services:
+  odoo:
+    build:
+      context: ./odoo
+      args:
+        DB_VERSION: "18"
+        ODOO_VERSION: "18.0"
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
+    environment:
+      EMAIL_FROM: ""
+      PGDATABASE: &dbname doodba-db-main
+      PGUSER: &dbuser "odoo"
+      PROXY_MODE: "true"
+    tty: true
+    volumes:
+      - filestore:/var/lib/odoo
+
+  db:
+    image: ghcr.io/tecnativa/postgres-autoconf:18-alpine
+    shm_size: 4gb
+    environment:
+      POSTGRES_DB: *dbname
+      POSTGRES_USER: *dbuser
+      PGDATA: "/var/lib/postgresql/data"
+      CONF_EXTRA: |
+        work_mem = 512MB
+    volumes:
+      - db:/var/lib/postgresql/data
+
+  smtpfake:
+    image: docker.io/mailhog/mailhog
