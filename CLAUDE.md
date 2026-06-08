@@ -305,6 +305,24 @@ makes the project self-contained for other developers. Alternatively, add
 `odoo/custom/src/private/*` to `.gitignore` and run `link-modules` as part of any setup
 step.
 
+### `workon` — one-shot project setup
+
+`workon` combines linking and shell access in a single step:
+
+```bash
+python3 odoo-cli.py workon my_project
+```
+
+It:
+
+1. Reads `addons_paths/my_project.txt` (errors if missing, lists available projects)
+2. Creates symlinks in `src/private/` for all listed modules
+3. Starts the containers (`docker compose up -d`) if they are not already running
+4. Opens an interactive bash shell inside the odoo container
+
+This is the fastest way to start working on a project after a fresh clone or after
+switching between projects.
+
 ### Installing the linked module
 
 After linking, tell Odoo to install it:

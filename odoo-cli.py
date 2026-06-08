@@ -181,15 +181,10 @@ def _rel(path):
     return pathlib.Path(path).relative_to(PROJECT_DIR)
 
 
-def _collect_desired(addons_paths_dir):
-    """Return ({name: module_path}, error_count) from all addons_paths/*.txt."""
+def _collect_desired(config_files):
+    """Return ({name: module_path}, error_count) from an iterable of .txt files."""
     desired: dict[str, pathlib.Path] = {}
     errors = 0
-    config_files = sorted(
-        f
-        for f in addons_paths_dir.iterdir()
-        if f.is_file() and not f.name.startswith(".")
-    )
     for addons_file in config_files:
         for raw in addons_file.read_text().splitlines():
             line = raw.strip()
@@ -278,7 +273,12 @@ def cmd_link_modules(args):
         sys.exit(1)
     private_dir.mkdir(parents=True, exist_ok=True)
 
-    desired, err_collect = _collect_desired(addons_paths_dir)
+    config_files = sorted(
+        f
+        for f in addons_paths_dir.iterdir()
+        if f.is_file() and not f.name.startswith(".")
+    )
+    desired, err_collect = _collect_desired(config_files)
     created, skipped, err_apply = _apply_symlinks(desired, private_dir, args.dry_run)
     removed = _clean_stale(desired, private_dir, args.dry_run) if args.clean else 0
 
@@ -292,6 +292,43 @@ def cmd_link_modules(args):
     )
     if errors:
         sys.exit(1)
+
+
+def cmd_workon(args):
+    """Link a project's modules and open an interactive shell in the container."""
+    project = args.project
+    addons_paths_dir = pathlib.Path(PROJECT_DIR) / "addons_paths"
+    private_dir = pathlib.Path(PROJECT_DIR) / "odoo" / "custom" / "src" / "private"
+
+    addons_file = addons_paths_dir / f"{project}.txt"
+    if not addons_file.exists():
+        print(f"ERROR: addons_paths/{project}.txt not found.", file=sys.stderr)
+        available = sorted(
+            f.stem
+            for f in addons_paths_dir.iterdir()
+            if f.suffix == ".txt" and not f.name.startswith(".")
+        )
+        if available:
+            print(f"Available projects: {', '.join(available)}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Linking modules for '{project}'...")
+    private_dir.mkdir(parents=True, exist_ok=True)
+    desired, err_collect = _collect_desired([addons_file])
+    created, skipped, err_apply = _apply_symlinks(desired, private_dir, dry_run=False)
+    errors = err_collect + err_apply
+    print(
+        f"  {created} linked, {skipped} already up-to-date"
+        + (f", {errors} error(s)" if errors else "")
+    )
+    if errors:
+        sys.exit(1)
+
+    if not _container_running():
+        print("Starting containers...")
+        subprocess.run(COMPOSE + ["up", "-d"], check=True)
+
+    _exec(["bash"], interactive=True)
 
 
 # ── argument parser ───────────────────────────────────────────────────────────
@@ -327,6 +364,9 @@ examples:
 
   # Run an arbitrary command in the container
   python odoo-cli.py exec -- bash -c "pip list | grep odoo"
+
+  # Link a project's modules and open a shell (combines link-modules + shell)
+  python odoo-cli.py workon my_project
 
   # Generate src/private/ symlinks from all extra-addons/*/addons.txt
   python odoo-cli.py link-modules
@@ -403,6 +443,22 @@ examples:
         help="Command and arguments (use -- to separate from cli flags)",
     )
     p.set_defaults(func=cmd_exec)
+
+    # workon
+    p = sub.add_parser(
+        "workon",
+        help="Link a project's modules and open a shell in the container",
+        description=(
+            "Reads addons_paths/PROJECT.txt, creates symlinks in src/private/, "
+            "starts the containers if needed, then opens an interactive bash shell."
+        ),
+    )
+    p.add_argument(
+        "project",
+        metavar="PROJECT",
+        help="Project name (reads addons_paths/PROJECT.txt)",
+    )
+    p.set_defaults(func=cmd_workon)
 
     # link-modules
     p = sub.add_parser(
