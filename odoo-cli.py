@@ -47,6 +47,29 @@ DEFAULT_FLAGS = [
     "--limit-time-real-cron=9999999",
 ]
 
+# ── project-setup workflow ────────────────────────────────────────────────────
+#
+# _setup_project(project) is called by `start -p` / `restart -p` and `workon`.
+#
+# Steps executed in order:
+#   1. Resolve container_configs/<project>.txt
+#      Exits with an error (and lists available projects) if the file is missing.
+#   2. Collect (host-side only, no side effects)
+#      _collect_desired + _collect_requirements — reads config, resolves paths.
+#   3. Start containers if not running
+#      Runs `docker compose up -d` BEFORE creating symlinks: the doodba entrypoint
+#      initialises auto/addons/ on container start and would clobber any symlinks
+#      written before it runs.
+#   4. Link modules
+#      _apply_symlinks → creates relative symlinks in odoo/auto/addons/ for every
+#      immediate subdirectory of each [addons] entry.
+#   5. Install requirements
+#      `pip install -r` for each path listed in [requirements]; no-op when absent.
+#
+# Callers:
+#   start / restart  with -p/--project  →  setup then launch the Odoo process
+#   workon           always             →  setup then open an interactive bash shell
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -81,10 +104,57 @@ def _container_running():
     return SERVICE in r.stdout.splitlines()
 
 
+def _setup_project(project):
+    """Link modules and install requirements for *project*."""
+    addons_paths_dir = pathlib.Path(PROJECT_DIR) / "container_configs"
+    addons_file = addons_paths_dir / f"{project}.txt"
+    if not addons_file.exists():
+        print(f"ERROR: container_configs/{project}.txt not found.", file=sys.stderr)
+        available = sorted(
+            f.stem
+            for f in addons_paths_dir.iterdir()
+            if f.suffix == ".txt" and not f.name.startswith(".")
+        )
+        if available:
+            print(f"Available projects: {', '.join(available)}", file=sys.stderr)
+        sys.exit(1)
+
+    # Collect everything from the host filesystem before touching containers.
+    desired, err_collect = _collect_desired([addons_file])
+    req_paths, err_req = _collect_requirements([addons_file])
+    if err_collect or err_req:
+        sys.exit(1)
+
+    # Start containers first: the doodba entrypoint initialises auto/addons/ on
+    # container start and would clobber symlinks created before it runs.
+    if not _container_running():
+        print("Starting containers...")
+        subprocess.run(COMPOSE + ["up", "-d"], check=True)
+
+    print(f"Linking modules for '{project}'...")
+    SYMLINK_DIR.mkdir(parents=True, exist_ok=True)
+    created, skipped, err_apply = _apply_symlinks(desired, SYMLINK_DIR, dry_run=False)
+    print(
+        f"  {created} linked, {skipped} already up-to-date"
+        + (f", {err_apply} error(s)" if err_apply else "")
+    )
+    if err_apply:
+        sys.exit(1)
+
+    if req_paths:
+        print("Installing requirements...")
+        for req in req_paths:
+            print(f"  pip install -r {req}")
+            _exec(["pip", "install", "--no-cache-dir", "-r", req])
+
+
 # ── commands ─────────────────────────────────────────────────────────────────
 
 
 def cmd_start(args):
+    if getattr(args, "project", None):
+        _setup_project(args.project)
+
     if not _container_running():
         print(
             "ERROR: The odoo container is not running. Run: docker compose up -d",
@@ -370,47 +440,7 @@ def cmd_link_modules(args):
 
 def cmd_workon(args):
     """Link a project's modules and open an interactive shell in the container."""
-    project = args.project
-    addons_paths_dir = pathlib.Path(PROJECT_DIR) / "container_configs"
-
-    addons_file = addons_paths_dir / f"{project}.txt"
-    if not addons_file.exists():
-        print(f"ERROR: container_configs/{project}.txt not found.", file=sys.stderr)
-        available = sorted(
-            f.stem
-            for f in addons_paths_dir.iterdir()
-            if f.suffix == ".txt" and not f.name.startswith(".")
-        )
-        if available:
-            print(f"Available projects: {', '.join(available)}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Linking modules for '{project}'...")
-    SYMLINK_DIR.mkdir(parents=True, exist_ok=True)
-    desired, err_collect = _collect_desired([addons_file])
-    created, skipped, err_apply = _apply_symlinks(desired, SYMLINK_DIR, dry_run=False)
-    errors = err_collect + err_apply
-    print(
-        f"  {created} linked, {skipped} already up-to-date"
-        + (f", {errors} error(s)" if errors else "")
-    )
-    if errors:
-        sys.exit(1)
-
-    req_paths, err_req = _collect_requirements([addons_file])
-    if err_req:
-        sys.exit(1)
-
-    if not _container_running():
-        print("Starting containers...")
-        subprocess.run(COMPOSE + ["up", "-d"], check=True)
-
-    if req_paths:
-        print("Installing requirements...")
-        for req in req_paths:
-            print(f"  pip install -r {req}")
-            _exec(["pip", "install", "--no-cache-dir", "-r", req])
-
+    _setup_project(args.project)
     _exec(["bash"], interactive=True)
 
 
@@ -429,6 +459,12 @@ examples:
 
   # Start against a specific database, installing modules
   python odoo-cli.py start -d myproject -i sale,purchase
+
+  # Link project modules + install requirements, then start Odoo (one shot)
+  python odoo-cli.py start -p myproject -d myproject -i account_ext
+
+  # Same, but after code changes (re-links, re-installs requirements, restarts)
+  python odoo-cli.py restart -p myproject -d myproject -u account_ext
 
   # Update a module after code change
   python odoo-cli.py restart -d myproject -u my_module
@@ -468,6 +504,13 @@ examples:
     p = sub.add_parser("start", help="Start Odoo in the background")
     p.add_argument("-d", "--database", metavar="DB", help="Database to connect to")
     p.add_argument(
+        "-p",
+        "--project",
+        metavar="PROJECT",
+        help="Link modules and install requirements from container_configs/PROJECT.txt "
+        "before starting (auto-starts containers if needed)",
+    )
+    p.add_argument(
         "-i", "--install", nargs="+", metavar="MODULE", help="Modules to install (-i)"
     )
     p.add_argument(
@@ -482,6 +525,12 @@ examples:
     # restart
     p = sub.add_parser("restart", help="Stop then start Odoo")
     p.add_argument("-d", "--database", metavar="DB")
+    p.add_argument(
+        "-p",
+        "--project",
+        metavar="PROJECT",
+        help="Link modules and install requirements before restarting",
+    )
     p.add_argument("-i", "--install", nargs="+", metavar="MODULE")
     p.add_argument("-u", "--update", nargs="+", metavar="MODULE")
     p.set_defaults(func=cmd_restart)

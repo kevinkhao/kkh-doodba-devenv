@@ -106,8 +106,12 @@ python3 odoo-cli.py start -d myproject
 # Start and install modules at first launch
 python3 odoo-cli.py start -d myproject -i sale,purchase,my_module
 
-# Restart and update a module after code changes
-python3 odoo-cli.py restart -d myproject -u my_module
+# Link project modules + install requirements, then start Odoo in one shot
+# (auto-starts containers if needed — ideal for agents and fresh clones)
+python3 odoo-cli.py start -p myproject -d myproject -i account_ext
+
+# Dev loop: restart after a code fix — no -p, no pip, no symlinks (fast)
+python3 odoo-cli.py restart -d myproject -u account_ext
 
 # Stop Odoo
 python3 odoo-cli.py stop
@@ -277,8 +281,8 @@ All immediate subdirectories are symlinked into `odoo/auto/addons/` as Odoo modu
 Non-directory entries are skipped automatically.
 
 **`[requirements]`** — each line is a path to a `requirements.txt` (relative to project
-root, must live under `odoo/custom/`). The `workon` command runs `pip install -r` for
-each listed file inside the container.
+root, must live under `odoo/custom/`). Both `workon` and `start -p` / `restart -p` run
+`pip install -r` for each listed file inside the container.
 
 One file per project. The filename is free-form (used only for organisation).
 
@@ -317,25 +321,29 @@ Re-run `link-modules` whenever you:
 The symlinks live in `odoo/auto/` which is gitignored — run `link-modules` or `workon`
 as part of any setup step after cloning.
 
-### `workon` — one-shot project setup
+### `workon` and `start -p` — one-shot project setup
 
-`workon` combines linking and shell access in a single step:
+Both commands share the same setup sequence (implemented in `_setup_project`):
 
-```bash
-python3 odoo-cli.py workon my_project
-```
+1. Read `container_configs/<project>.txt` (error if missing, lists available projects)
+2. Collect desired modules and requirement paths (host-side, no side effects)
+3. Start the containers (`docker compose up -d`) if they are not already running —
+   **containers start before symlinks** so the doodba entrypoint (which initialises
+   `auto/addons/` on first container start) does not clobber freshly-created links
+4. Create symlinks in `odoo/auto/addons/` for all modules in the `[addons]` section
+5. Run `pip install -r` for each path in the `[requirements]` section (if any)
 
-It:
+They differ only in the final step:
 
-1. Reads `container_configs/my_project.txt` (errors if missing, lists available
-   projects)
-2. Creates symlinks in `odoo/auto/addons/` for all modules in the `[addons]` section
-3. Starts the containers (`docker compose up -d`) if they are not already running
-4. Runs `pip install -r` for each path in the `[requirements]` section (if any)
-5. Opens an interactive bash shell inside the odoo container
+| Command                                      | Final step                      |
+| -------------------------------------------- | ------------------------------- |
+| `workon my_project`                          | Opens an interactive bash shell |
+| `start -p my_project -d mydb`                | Launches the Odoo process       |
+| `restart -p my_project -d mydb -u my_module` | Restarts the Odoo process       |
 
-This is the fastest way to start working on a project after a fresh clone or after
-switching between projects.
+Use **`workon`** when you want an interactive shell to explore or debug. Use
+**`start -p`** / **`restart -p`** when an agent or script needs Odoo running without a
+terminal (e.g. CI, automation, first-time setup from a non-interactive context).
 
 ### Installing the linked module
 
@@ -344,6 +352,62 @@ After linking, tell Odoo to install it:
 ```bash
 python3 odoo-cli.py restart -d myproject -i account_ext
 ```
+
+---
+
+## Dev loop
+
+The dev loop is the fast iteration cycle for fixing and testing a module without
+repeating the full project setup. It has two phases:
+
+### Phase 1 — setup (once per session or fresh clone)
+
+```bash
+python3 odoo-cli.py start -p myproject -d mydb -i my_module
+```
+
+This runs `_setup_project`: starts containers, creates symlinks, installs
+`requirements.txt`, then launches Odoo with `-i my_module`. Run it once.
+
+### Phase 2 — dev loop (repeated for every code fix)
+
+```bash
+# edit source files ...
+
+# then restart — no -p, no pip, no symlinks
+python3 odoo-cli.py restart -d mydb -i my_module   # first successful install
+python3 odoo-cli.py restart -d mydb -u my_module   # subsequent updates
+```
+
+`restart` without `-p` only kills and re-launches the Odoo process. No container touch,
+no pip, no symlink work. Typical cycle time is ~10–15 seconds.
+
+Use `-i` (install) when the module has never been successfully installed in the
+database. Switch to `-u` (update) once it is installed — `-u` on an uninstalled module
+is silently ignored.
+
+### `-i` vs `-u`
+
+| Flag           | When to use                                                          |
+| -------------- | -------------------------------------------------------------------- |
+| `-i my_module` | First successful install, or after a failed install that rolled back |
+| `-u my_module` | Module already installed; apply model/view/data changes              |
+
+### pip packages across restarts
+
+Packages installed via `-p` / `requirements.txt` persist for the lifetime of the
+container. Plain `restart` does not re-run pip — the packages are already there. They
+are lost only when the container is recreated (`docker compose down` + `up`), at which
+point you need to run `start -p` again.
+
+### When to re-run `-p`
+
+| Situation                                  | Command                                       |
+| ------------------------------------------ | --------------------------------------------- |
+| Fresh clone or after `docker compose down` | `start -p myproject …`                        |
+| New entry added to `[requirements]`        | `restart -p myproject …`                      |
+| New entry added to `[addons]`              | `restart -p myproject …`                      |
+| Code change only                           | `restart -d mydb -u my_module` ← **dev loop** |
 
 ---
 
