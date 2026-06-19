@@ -48,13 +48,32 @@ docker compose build       # rebuild image after Dockerfile / requirements chang
 
 ## Accessing services
 
-| Service            | URL                                         |
-| ------------------ | ------------------------------------------- |
-| Odoo (via Traefik) | http://odoo-18.localhost                    |
-| Odoo (direct)      | http://127.0.0.1:18069                      |
-| DB manager         | http://127.0.0.1:18069/web/database/manager |
-| MailHog            | http://127.0.0.1:18025                      |
-| PostgreSQL         | `docker compose exec db psql -U odoo`       |
+| Service                 | URL                                         |
+| ----------------------- | ------------------------------------------- |
+| Odoo (via Traefik)      | http://odoo-18.localhost                    |
+| Odoo `default` instance | http://127.0.0.1:18069                      |
+| Odoo named instances    | http://127.0.0.1:18070 – 18099 †            |
+| DB manager              | http://127.0.0.1:18069/web/database/manager |
+| MailHog                 | http://127.0.0.1:18025                      |
+| PostgreSQL              | `docker compose exec db psql -U odoo`       |
+
+† Named instances use container ports 8070–8099 (auto-assigned). To reach them from the
+host browser, add the matching bindings to `docker-compose.override.yml`:
+
+```yaml
+services:
+  odoo:
+    command:
+      - sleep
+      - infinity
+    ports:
+      - "18070:8070"
+      - "18071:8071"
+      - "18072:8072"
+```
+
+`docker compose exec`-based commands (`shell`, `exec`, `logs`) work without these
+bindings.
 
 ## Database
 
@@ -76,3 +95,79 @@ docker compose build       # rebuild image after Dockerfile / requirements chang
 | `odoo/custom/src/`            | Source tree: `odoo/` (community), `private/` (custom modules)                 |
 | `odoo/auto/`                  | Generated config and logs (rw-mounted, gitignored)                            |
 | `.env`                        | Sets `COMPOSE_PROJECT_NAME=18-0-doodba` and `PORT_PREFIX=18`                  |
+
+## Dev loop
+
+Use `/odoo-cli` for the full CLI reference.
+
+**Session init — run once per session (links modules, installs pip deps, starts Odoo):**
+
+```bash
+python3 odoo-cli.py start -p myproject -d mydb -i my_module
+```
+
+**Iterate — after every code change:**
+
+```bash
+python3 odoo-cli.py restart -u my_module   # DB and port inferred from PID file
+python3 odoo-cli.py restart -i my_module   # re-install after rollback/failure
+```
+
+**Logs:**
+
+```bash
+python3 odoo-cli.py logs --follow   # live tail (auto-detects instance)
+python3 odoo-cli.py logs -n 50      # last 50 lines
+```
+
+**Missing Python packages:**
+
+```bash
+python3 odoo-cli.py pip pandas xlrd   # ephemeral; or add to requirements.txt + start -p
+```
+
+### Running two projects simultaneously
+
+```bash
+# Start both instances
+python3 odoo-cli.py start -p samotics -d samotics -i samotics_sale
+python3 odoo-cli.py start -p fullavl  -d fullavl  -i account_ext
+
+# See all running instances with their ports
+python3 odoo-cli.py status
+
+# Target a specific instance for restart / logs / stop
+python3 odoo-cli.py restart -p samotics -u samotics_sale
+python3 odoo-cli.py logs    -p fullavl  --follow
+python3 odoo-cli.py stop    -p samotics
+```
+
+When only one instance is running, `-p` is optional — commands auto-detect it.
+
+---
+
+## Running tests
+
+Two steps — install first without tests, then run tests separately. Installing with
+`--test-enable` triggers every test in every dependency, which is slow and noisy.
+
+**Step 1 — install on a fresh DB (once):**
+
+```bash
+python3 odoo-cli.py exec -- bash -c \
+  "odoo -d test_db -i my_module --stop-after-init --workers=0 --no-http \
+   > /opt/odoo/auto/test.log 2>&1; echo \"exit: \$?\" >> /opt/odoo/auto/test.log"
+```
+
+**Step 2 — run target tests (repeatable):**
+
+```bash
+python3 odoo-cli.py exec -- bash -c \
+  "odoo --test-enable --test-tags :MyTestClass -d test_db -u my_module \
+   --stop-after-init --workers=0 --no-http \
+   > /opt/odoo/auto/test.log 2>&1; echo \"exit: \$?\" >> /opt/odoo/auto/test.log"
+```
+
+- Step 1 uses `-i`; Step 2 uses `-u` — never use `-i` with `--test-enable`
+- Use a dedicated DB with a random name; drop and recreate for a clean slate
+- Read results from `./odoo/auto/test.log` on the host

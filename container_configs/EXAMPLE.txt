@@ -1,23 +1,38 @@
 # container_configs/EXAMPLE.txt
 #
-# Two sections are supported. Both are optional.
+# Three sections are supported. All are optional.
 #
 # [addons]
-#   Each line is a container directory (relative to project root).
-#   All immediate subdirectories are symlinked into src/private/ as Odoo modules.
+#   Each line is a directory (relative to project root).
+#   Every immediate subdirectory becomes a symlink in odoo/auto/addons/ so
+#   doodba picks it up as an Odoo module. Dot-prefixed dirs (.git, etc.) are
+#   skipped. Later entries override earlier ones when names clash, so list
+#   shared repos first and project-specific overrides last.
+#
+# [setup]
+#   Each line is a path to a shell script (relative to project root).
+#   Scripts live in container_configs/ alongside this file.
+#   They are piped to bash inside the container before pip install runs —
+#   use them to install system-level build dependencies (apt-get, etc.).
+#   See EXAMPLE.sh for a template.
 #
 # [requirements]
 #   Each line is a path to a requirements.txt (relative to project root).
-#   `workon` runs `pip install -r` for each one inside the container.
-#   Paths must live under odoo/custom/ (the mounted volume).
+#   Must be under odoo/custom/ (the bind-mounted volume).
+#   `workon` / `start -p` runs `pip install -r` for each one.
 #
 # Usage:
 #   python3 odoo-cli.py workon EXAMPLE
-#   python3 odoo-cli.py link-modules
+#   python3 odoo-cli.py start -p EXAMPLE -d mydb
 
-# [addons]
-# odoo/custom/extra-addons/my_project/core
-# odoo/custom/extra-addons/my_project/sales
-#
-# [requirements]
-# odoo/custom/extra-addons/my_project/requirements.txt
+[addons]
+# odoo/custom/extra-addons/360/360_generic
+# odoo/custom/extra-addons/360/360_community
+# odoo/custom/extra-addons/360/my_project/custom
+# odoo/custom/extra-addons/360/my_project/community
+
+[setup]
+# container_configs/EXAMPLE.sh
+
+[requirements]
+# odoo/custom/extra-addons/360/my_project/requirements.txt

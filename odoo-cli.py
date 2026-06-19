@@ -5,6 +5,9 @@ Odoo development environment CLI.
 Manages the Odoo process inside the running Docker container.
 All commands communicate with the 'odoo' service via `docker compose exec`.
 
+Supports multiple simultaneous Odoo instances, each identified by a project
+name (the -p flag). The 'default' instance is used when -p is not specified.
+
 Usage:
     python odoo-cli.py <command> [options]
 
@@ -12,6 +15,7 @@ Run `python odoo-cli.py --help` for the full command list.
 """
 
 import argparse
+import json
 import os
 import pathlib
 import subprocess
@@ -26,10 +30,13 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 COMPOSE = ["docker", "compose", "--project-directory", PROJECT_DIR]
 SERVICE = "odoo"
 
-PID_FILE = "/tmp/odoo.pid"
-# Log written inside the rw-mounted volume so it's readable from the host
-# at ./odoo/auto/odoo.log
-LOG_FILE = "/opt/odoo/auto/odoo.log"
+# Instance-namespaced files:
+#   /tmp/odoo-{instance}.pid      — 3 lines: pid, db, port
+#   /opt/odoo/auto/odoo-{instance}.log
+# The legacy /tmp/odoo.pid (single PID) is read as a migration shim for the
+# 'default' instance only.
+LEGACY_PID_FILE = "/tmp/odoo.pid"
+LOG_DIR = "/opt/odoo/auto"
 
 # Volume mount: PROJECT_DIR/odoo/custom → /opt/odoo/custom inside the container
 HOST_CUSTOM = pathlib.Path(PROJECT_DIR) / "odoo" / "custom"
@@ -38,6 +45,9 @@ CONTAINER_CUSTOM = "/opt/odoo/custom"
 # Where symlinks are placed so doodba picks up custom modules
 SYMLINK_DIR = pathlib.Path(PROJECT_DIR) / "odoo" / "auto" / "addons"
 EXTRA_ADDONS_DIR = pathlib.Path(PROJECT_DIR) / "odoo" / "custom" / "extra-addons"
+
+DEFAULT_PORT = 8069
+PORT_POOL = range(8070, 8100)  # 30 slots for named instances
 
 DEFAULT_FLAGS = [
     "--workers=0",
@@ -70,7 +80,7 @@ DEFAULT_FLAGS = [
 #   start / restart  with -p/--project  →  setup then launch the Odoo process
 #   workon           always             →  setup then open an interactive bash shell
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 
 def _exec(cmd, *, interactive=False, check=True, capture=False, **kwargs):
@@ -84,15 +94,6 @@ def _exec(cmd, *, interactive=False, check=True, capture=False, **kwargs):
     return subprocess.run(full, check=check, **kwargs)
 
 
-def _is_running():
-    """Return True if an Odoo process is alive inside the container."""
-    r = _exec(
-        ["bash", "-c", f"[ -f {PID_FILE} ] && kill -0 $(cat {PID_FILE}) 2>/dev/null"],
-        check=False,
-    )
-    return r.returncode == 0
-
-
 def _container_running():
     """Return True if the odoo container itself is up."""
     r = subprocess.run(
@@ -102,6 +103,221 @@ def _container_running():
         capture_output=True,
     )
     return SERVICE in r.stdout.splitlines()
+
+
+# ── instance helpers ──────────────────────────────────────────────────────────
+
+
+def _instance(args):
+    """Return the instance name from args, defaulting to 'default'."""
+    return getattr(args, "project", None) or "default"
+
+
+def _pid_file(instance):
+    return f"/tmp/odoo-{instance}.pid"
+
+
+def _log_file(instance):
+    return f"{LOG_DIR}/odoo-{instance}.log"
+
+
+def _host_port(container_port):
+    """Convert a container port to its host-mapped port using PORT_PREFIX from .env."""
+    prefix = "18"
+    env_file = pathlib.Path(PROJECT_DIR) / ".env"
+    try:
+        for line in env_file.read_text().splitlines():
+            if line.strip().startswith("PORT_PREFIX="):
+                prefix = line.split("=", 1)[1].strip()
+                break
+    except FileNotFoundError:
+        pass
+    # 8069 → 18069, 8070 → 18070, etc.
+    return f"{prefix}{str(container_port)[1:]}"
+
+
+def _is_running(instance):
+    """Return True if a live Odoo process exists for *instance* inside the container."""
+    pid_file = _pid_file(instance)
+    r = _exec(
+        [
+            "bash",
+            "-c",
+            f"[ -f {pid_file} ] && kill -0 \"$(sed -n '1p' {pid_file})\" 2>/dev/null",
+        ],
+        check=False,
+    )
+    if r.returncode == 0:
+        return True
+    # Migration shim: check legacy /tmp/odoo.pid for the 'default' instance
+    if instance == "default":
+        lf = LEGACY_PID_FILE
+        r2 = _exec(
+            ["bash", "-c", f'[ -f {lf} ] && kill -0 "$(cat {lf})" 2>/dev/null'],
+            check=False,
+        )
+        return r2.returncode == 0
+    return False
+
+
+def _read_pid_meta(instance):
+    """Return (pid, db, port) from the PID file for *instance*, or (None, None, None).
+
+    PID file format — 3 lines: pid, db, port.
+    Falls back to the legacy /tmp/odoo.pid for the 'default' instance if the
+    new-style file does not exist (migration shim).
+    """
+    pid_file = _pid_file(instance)
+    r = _exec(["bash", "-c", f"cat {pid_file} 2>/dev/null"], capture=True, check=False)
+
+    if not r.stdout.strip() and instance == "default":
+        r = _exec(
+            ["bash", "-c", f"cat {LEGACY_PID_FILE} 2>/dev/null"],
+            capture=True,
+            check=False,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            print(
+                "Note: reading legacy /tmp/odoo.pid — will migrate on next restart.",
+                file=sys.stderr,
+            )
+            try:
+                return int(r.stdout.strip().splitlines()[0]), None, DEFAULT_PORT
+            except (ValueError, IndexError):
+                return None, None, None
+        return None, None, None
+
+    if not r.stdout.strip():
+        return None, None, None
+
+    lines = r.stdout.strip().splitlines()
+    try:
+        pid = int(lines[0])
+    except (ValueError, IndexError):
+        return None, None, None
+
+    db = lines[1].strip() if len(lines) > 1 and lines[1].strip() else None
+    port_str = lines[2].strip() if len(lines) > 2 else ""
+    port = int(port_str) if port_str.isdigit() else None
+    return pid, db, port
+
+
+def _list_instances():
+    """Return all live Odoo instances as [{instance, pid, db, port}]."""
+    script = (
+        "for f in /tmp/odoo-*.pid; do\n"
+        '    [ -f "$f" ] || continue\n'
+        "    pid=$(sed -n '1p' \"$f\")\n"
+        '    kill -0 "$pid" 2>/dev/null || continue\n'
+        '    name=$(basename "$f" .pid); name=${name#odoo-}\n'
+        "    db=$(sed -n '2p' \"$f\")\n"
+        "    port=$(sed -n '3p' \"$f\")\n"
+        '    echo "$name|$pid|$db|$port"\n'
+        "done\n"
+    )
+    r = _exec(["bash", "-c", script], capture=True, check=False)
+    instances = []
+    for line in r.stdout.strip().splitlines():
+        parts = line.split("|")
+        if len(parts) < 2:
+            continue
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            continue
+        db = parts[2] if len(parts) > 2 and parts[2] else None
+        port_str = parts[3] if len(parts) > 3 else ""
+        port = int(port_str) if port_str.isdigit() else None
+        instances.append({"instance": parts[0], "pid": pid, "db": db, "port": port})
+
+    # Migration shim: pick up legacy /tmp/odoo.pid if 'default' is not found
+    if not any(i["instance"] == "default" for i in instances):
+        r2 = _exec(
+            ["bash", "-c", f"[ -f {LEGACY_PID_FILE} ] && cat {LEGACY_PID_FILE}"],
+            capture=True,
+            check=False,
+        )
+        if r2.returncode == 0 and r2.stdout.strip():
+            try:
+                pid = int(r2.stdout.strip().splitlines()[0])
+                r3 = _exec(["bash", "-c", f"kill -0 {pid} 2>/dev/null"], check=False)
+                if r3.returncode == 0:
+                    instances.append(
+                        {
+                            "instance": "default",
+                            "pid": pid,
+                            "db": None,
+                            "port": DEFAULT_PORT,
+                        }
+                    )
+            except (ValueError, IndexError):
+                pass
+
+    return instances
+
+
+def _auto_detect_instance():
+    """Return the instance name when exactly one is running.
+
+    Print error and return None when zero or multiple instances are running.
+    """
+    instances = _list_instances()
+    if len(instances) == 0:
+        print("ERROR: No Odoo instance is running. Use 'start' first.", file=sys.stderr)
+        return None
+    if len(instances) == 1:
+        return instances[0]["instance"]
+    print("ERROR: Multiple instances running — specify -p PROJECT:", file=sys.stderr)
+    for i in instances:
+        detail = f"  {i['instance']:<16} PID {i['pid']}"
+        if i["db"]:
+            detail += f", DB {i['db']}"
+        if i["port"]:
+            detail += f", port {i['port']}"
+        print(detail, file=sys.stderr)
+    return None
+
+
+def _assign_port(instance):
+    """Return a port for *instance*.
+
+    DEFAULT_PORT for 'default', else the lowest free port in PORT_POOL.
+    """
+    if instance == "default":
+        return DEFAULT_PORT
+    used = {i["port"] for i in _list_instances() if i["port"]}
+    for port in PORT_POOL:
+        if port not in used:
+            return port
+    print(
+        f"WARNING: port pool {PORT_POOL.start}–{PORT_POOL.stop - 1} exhausted,"
+        f" reusing {PORT_POOL.start}.",
+        file=sys.stderr,
+    )
+    return PORT_POOL.start
+
+
+def _kill_instance(instance):
+    """Kill the Odoo process for *instance* and remove its PID file."""
+    pid_file = _pid_file(instance)
+    r = _exec(["bash", "-c", f"[ -f {pid_file} ]"], check=False)
+    if r.returncode == 0:
+        _exec(["bash", "-c", f"kill \"$(sed -n '1p' {pid_file})\" && rm -f {pid_file}"])
+        return
+    # Migration shim
+    if instance == "default":
+        r2 = _exec(["bash", "-c", f"[ -f {LEGACY_PID_FILE} ]"], check=False)
+        if r2.returncode == 0:
+            _exec(
+                [
+                    "bash",
+                    "-c",
+                    f'kill "$(cat {LEGACY_PID_FILE})" && rm -f {LEGACY_PID_FILE}',
+                ]
+            )
+
+
+# ── project-setup helpers ─────────────────────────────────────────────────────
 
 
 def _setup_project(project):
@@ -119,14 +335,12 @@ def _setup_project(project):
             print(f"Available projects: {', '.join(available)}", file=sys.stderr)
         sys.exit(1)
 
-    # Collect everything from the host filesystem before touching containers.
     desired, err_collect = _collect_desired([addons_file])
     req_paths, err_req = _collect_requirements([addons_file])
-    if err_collect or err_req:
+    setup_paths, err_setup = _collect_setup([addons_file])
+    if err_collect or err_req or err_setup:
         sys.exit(1)
 
-    # Start containers first: the doodba entrypoint initialises auto/addons/ on
-    # container start and would clobber symlinks created before it runs.
     if not _container_running():
         print("Starting containers...")
         subprocess.run(COMPOSE + ["up", "-d"], check=True)
@@ -141,6 +355,17 @@ def _setup_project(project):
     if err_apply:
         sys.exit(1)
 
+    if setup_paths:
+        print("Running setup scripts...")
+        for script in setup_paths:
+            print(f"  bash {_rel(script)}")
+            subprocess.run(
+                COMPOSE + ["exec", "-T", "--user", "root", SERVICE, "bash"],
+                input=script.read_text(),
+                text=True,
+                check=True,
+            )
+
     if req_paths:
         print("Installing requirements...")
         for req in req_paths:
@@ -148,7 +373,7 @@ def _setup_project(project):
             _exec(["pip", "install", "--no-cache-dir", "-r", req])
 
 
-# ── commands ─────────────────────────────────────────────────────────────────
+# ── commands ──────────────────────────────────────────────────────────────────
 
 
 def cmd_start(args):
@@ -161,13 +386,24 @@ def cmd_start(args):
             file=sys.stderr,
         )
         sys.exit(1)
-    if _is_running():
-        print("Odoo is already running. Use 'restart' to restart it.")
+
+    instance = _instance(args)
+
+    if _is_running(instance):
+        print(
+            f"Odoo instance '{instance}' is already running."
+            " Use 'restart' to restart it."
+        )
         sys.exit(0)
 
-    flags = list(DEFAULT_FLAGS)
-    if args.database:
-        flags += ["-d", args.database]
+    db = args.database
+    port = getattr(args, "port", None) or _assign_port(instance)
+    log_file = _log_file(instance)
+    pid_file = _pid_file(instance)
+
+    flags = list(DEFAULT_FLAGS) + [f"--xmlrpc-port={port}"]
+    if db:
+        flags += ["-d", db]
     if getattr(args, "install", None):
         flags += ["-i", ",".join(args.install)]
     if getattr(args, "update", None):
@@ -175,26 +411,71 @@ def cmd_start(args):
 
     odoo_cmd = "odoo " + " ".join(flags)
     launch = (
-        f"nohup {odoo_cmd} > {LOG_FILE} 2>&1 & "
-        f"echo $! > {PID_FILE} && "
-        f'echo "Odoo started (PID $(cat {PID_FILE})). Logs: {LOG_FILE}"'
+        f"nohup {odoo_cmd} > {log_file} 2>&1 & "
+        f'_PID=$! && '
+        f'printf "%s\\n%s\\n%s\\n" "$_PID" "{db or ""}" "{port}" > {pid_file} && '
+        f'echo "Odoo instance \'{instance}\' started (PID $_PID, port {port}). '
+        f'Logs: {log_file}"'
     )
     _exec(["bash", "-c", launch])
 
 
 def cmd_stop(args):
-    if not _is_running():
-        print("Odoo is not running.")
+    instance = getattr(args, "project", None)
+    if not instance:
+        instance = _auto_detect_instance()
+        if not instance:
+            sys.exit(1)
+
+    if not _is_running(instance):
+        print(f"Odoo instance '{instance}' is not running.")
         return
-    _exec(["bash", "-c", f"kill $(cat {PID_FILE}) && rm -f {PID_FILE}"])
-    print("Odoo stopped.")
+
+    _kill_instance(instance)
+    print(f"Odoo instance '{instance}' stopped.")
 
 
 def cmd_restart(args):
-    if _is_running():
-        _exec(["bash", "-c", f"kill $(cat {PID_FILE}) && rm -f {PID_FILE}"])
+    instance = getattr(args, "project", None)
+
+    if not instance:
+        instances = _list_instances()
+        if len(instances) == 0:
+            # Nothing running — start fresh as 'default'
+            instance = "default"
+            args.project = "default"
+        elif len(instances) == 1:
+            instance = instances[0]["instance"]
+            args.project = instance
+        else:
+            print(
+                "ERROR: Multiple instances running — specify -p PROJECT:",
+                file=sys.stderr,
+            )
+            for i in instances:
+                detail = f"  {i['instance']:<16} PID {i['pid']}"
+                if i["db"]:
+                    detail += f", DB {i['db']}"
+                if i["port"]:
+                    detail += f", port {i['port']}"
+                print(detail, file=sys.stderr)
+            sys.exit(1)
+    else:
+        args.project = instance
+
+    # Infer -d and --port from stored metadata when not explicitly provided
+    _, stored_db, stored_port = _read_pid_meta(instance)
+    if not args.database and stored_db:
+        args.database = stored_db
+        print(f"Using database '{stored_db}' from instance metadata.")
+    if not getattr(args, "port", None) and stored_port:
+        args.port = stored_port
+
+    if _is_running(instance):
+        _kill_instance(instance)
         print("Stopped. Waiting for process to exit...")
         time.sleep(2)
+
     cmd_start(args)
 
 
@@ -203,23 +484,83 @@ def cmd_status(args):
         print("Container: not running")
         return
     print("Container: running")
-    if _is_running():
-        r = _exec(["cat", PID_FILE], capture=True, check=False)
-        pid = r.stdout.strip()
-        print(f"Odoo:      running (PID {pid})")
-        print(f"Logs:      {LOG_FILE}  (host path: ./odoo/auto/odoo.log)")
-    else:
+
+    instance = getattr(args, "project", None)
+    use_json = getattr(args, "json", False)
+
+    if instance:
+        pid, db, port = _read_pid_meta(instance)
+        running = _is_running(instance)
+        if use_json:
+            print(
+                json.dumps(
+                    {
+                        "instance": instance,
+                        "pid": pid,
+                        "db": db,
+                        "port": port,
+                        "running": running,
+                    }
+                )
+            )
+            return
+        if running:
+            print(f"Instance:  {instance}")
+            print(f"Odoo:      running (PID {pid})")
+            if db:
+                print(f"Database:  {db}")
+            if port:
+                print(f"Port:      {port}  (host: http://127.0.0.1:{_host_port(port)})")
+            print(f"Logs:      {_log_file(instance)}")
+            print(f"           host: ./odoo/auto/odoo-{instance}.log")
+        else:
+            print(f"Instance:  {instance}")
+            print("Odoo:      not running")
+        return
+
+    # All instances
+    instances = _list_instances()
+    if use_json:
+        print(json.dumps(instances))
+        return
+    if not instances:
         print("Odoo:      not running")
+        return
+
+    col_i = max(len("INSTANCE"), max(len(i["instance"]) for i in instances))
+    col_p = max(len("PID"), max(len(str(i["pid"])) for i in instances))
+    col_d = max(len("DATABASE"), max(len(i["db"] or "—") for i in instances))
+    col_o = len("PORT")
+    fmt = f"{{:<{col_i}}}  {{:<{col_p}}}  {{:<{col_d}}}  {{:<{col_o}}}"
+    print(fmt.format("INSTANCE", "PID", "DATABASE", "PORT"))
+    print(fmt.format("─" * col_i, "─" * col_p, "─" * col_d, "─" * col_o))
+    for i in instances:
+        print(
+            fmt.format(
+                i["instance"],
+                str(i["pid"]),
+                i["db"] or "—",
+                str(i["port"]) if i["port"] else "—",
+            )
+        )
 
 
 def cmd_logs(args):
     if not _container_running():
         print("ERROR: Container is not running.", file=sys.stderr)
         sys.exit(1)
+
+    instance = getattr(args, "project", None)
+    if not instance:
+        instance = _auto_detect_instance()
+        if not instance:
+            sys.exit(1)
+
+    log_file = _log_file(instance)
     n = args.lines if args.lines else 100
     flags = f"-n {n}" + (" -f" if args.follow else "")
-    no_log_msg = "No log file yet — start Odoo first."
-    bash = f"tail {flags} {LOG_FILE} 2>/dev/null || echo '{no_log_msg}'"
+    no_log_msg = f"No log file yet — start instance '{instance}' first."
+    bash = f"tail {flags} {log_file} 2>/dev/null || echo '{no_log_msg}'"
     _exec(["bash", "-c", bash], interactive=args.follow)
 
 
@@ -245,8 +586,6 @@ def cmd_shell(args):
 
 def cmd_exec(args):
     """Run an arbitrary command inside the container."""
-    # argparse REMAINDER includes the '--' separator; strip it so it isn't
-    # forwarded to the OCI runtime as a literal executable name.
     cmd = args.cmd[1:] if args.cmd and args.cmd[0] == "--" else args.cmd
     if not cmd:
         print("ERROR: Provide a command to run.", file=sys.stderr)
@@ -282,11 +621,7 @@ def _parse_config(config_file):
 
 
 def _collect_desired(config_files):
-    """Return ({name: module_path}, error_count) from an iterable of .txt files.
-
-    Each line in the [addons] section is a container directory; all immediate
-    subdirectories of that container are candidates for linking.
-    """
+    """Return ({name: module_path}, error_count) from an iterable of .txt files."""
     desired: dict[str, pathlib.Path] = {}
     errors = 0
     for addons_file in config_files:
@@ -302,25 +637,15 @@ def _collect_desired(config_files):
                 errors += 1
                 continue
             for module_path in sorted(container_path.iterdir()):
-                if not module_path.is_dir():
+                if not module_path.is_dir() or module_path.name.startswith("."):
                     continue
                 name = module_path.name
-                if name in desired:
-                    if desired[name] != module_path:
-                        a, b = _rel(module_path), _rel(desired[name])
-                        print(f"  CONFLICT {name}: {a} vs {b} — skipping")
-                        errors += 1
-                    continue
                 desired[name] = module_path
     return desired, errors
 
 
 def _collect_requirements(config_files):
-    """Return ([container_paths], error_count) for [requirements] entries.
-
-    Paths are given relative to PROJECT_DIR and must live under odoo/custom/
-    so they can be translated to the equivalent container path.
-    """
+    """Return ([container_paths], error_count) for [requirements] entries."""
     req_paths: list[str] = []
     errors = 0
     for addons_file in config_files:
@@ -344,6 +669,26 @@ def _collect_requirements(config_files):
     return req_paths, errors
 
 
+def _collect_setup(config_files):
+    """Return ([host_path], error_count) for [setup] script entries.
+
+    Scripts are piped to bash via stdin so they don't need to be inside the
+    bind-mounted volume — they can live anywhere on the host (e.g. container_configs/).
+    """
+    script_paths: list[pathlib.Path] = []
+    errors = 0
+    for addons_file in config_files:
+        src = _rel(addons_file)
+        for line in _parse_config(addons_file).get("setup", []):
+            host_path = (pathlib.Path(PROJECT_DIR) / line).resolve()
+            if not host_path.exists():
+                print(f"  MISSING  {host_path}  (from {src})")
+                errors += 1
+                continue
+            script_paths.append(host_path)
+    return script_paths, errors
+
+
 def _apply_symlinks(desired, private_dir, dry_run):
     """Create symlinks in *private_dir* for each entry in *desired*.
 
@@ -358,9 +703,13 @@ def _apply_symlinks(desired, private_dir, dry_run):
             if current == module_path:
                 skipped += 1
                 continue
-            lp = _rel(link_path)
-            print(f"  CONFLICT {lp} already points to {current} — skipping")
-            errors += 1
+            if dry_run:
+                print(f"  would relink  {_rel(link_path)}  →  {rel_target}")
+            else:
+                link_path.unlink()
+                link_path.symlink_to(rel_target)
+                print(f"  relinked  {_rel(link_path)}  →  {rel_target}")
+            created += 1
             continue
         if link_path.exists():
             lp = _rel(link_path)
@@ -404,11 +753,6 @@ def cmd_link_modules(args):
     Read all *.txt files in container_configs/, expand each listed directory into
     its immediate subdirectories, and create relative symlinks in
     odoo/auto/addons/ so doodba picks them up alongside the community modules.
-
-    container_configs/<project>.txt format (paths relative to project root):
-        # comment — each line is a container directory, not a single module
-        odoo/custom/extra-addons/my_project/core
-        odoo/custom/extra-addons/my_project/sales
     """
     addons_paths_dir = pathlib.Path(PROJECT_DIR) / "container_configs"
 
@@ -452,28 +796,37 @@ def build_parser():
         prog="odoo-cli.py",
         description="Manage the Odoo process inside the dev Docker container.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 examples:
-  # Start Odoo (uses default dev flags)
+  # Start Odoo (default instance, port {DEFAULT_PORT})
   python odoo-cli.py start
 
-  # Start against a specific database, installing modules
-  python odoo-cli.py start -d myproject -i sale,purchase
+  # Start against a specific database
+  python odoo-cli.py start -d myproject
 
-  # Link project modules + install requirements, then start Odoo (one shot)
+  # Full project setup: link modules + install requirements + start Odoo
   python odoo-cli.py start -p myproject -d myproject -i account_ext
 
-  # Same, but after code changes (re-links, re-installs requirements, restarts)
-  python odoo-cli.py restart -p myproject -d myproject -u account_ext
+  # Dev loop: restart after a code fix (DB and port inferred from PID file)
+  python odoo-cli.py restart -u account_ext
 
-  # Update a module after code change
-  python odoo-cli.py restart -d myproject -u my_module
+  # Restart a specific instance
+  python odoo-cli.py restart -p samotics -u my_module
 
-  # Check what is running
+  # Check all running instances
   python odoo-cli.py status
 
-  # Stream live logs
+  # Check a specific instance (machine-readable)
+  python odoo-cli.py status -p samotics --json
+
+  # Stop a specific instance
+  python odoo-cli.py stop -p samotics
+
+  # Stream live logs (auto-detects instance when only one is running)
   python odoo-cli.py logs --follow
+
+  # Stream logs for a specific instance
+  python odoo-cli.py logs -p fullavl --follow
 
   # Install a Python package on the fly
   python odoo-cli.py pip pandas xlrd
@@ -484,16 +837,16 @@ examples:
   # Run an arbitrary command in the container
   python odoo-cli.py exec -- bash -c "pip list | grep odoo"
 
-  # Link a project's modules and open a shell (combines link-modules + shell)
+  # Link a project's modules and open a shell
   python odoo-cli.py workon my_project
 
-  # Generate src/private/ symlinks from all extra-addons/*/addons.txt
+  # Generate odoo/auto/addons/ symlinks from all container_configs/*.txt
   python odoo-cli.py link-modules
 
   # Preview changes without touching the filesystem
   python odoo-cli.py link-modules --dry-run
 
-  # Also remove symlinks whose entries were deleted from addons.txt
+  # Also remove symlinks whose entries were deleted from container_configs/
   python odoo-cli.py link-modules --clean
 """,
     )
@@ -507,8 +860,21 @@ examples:
         "-p",
         "--project",
         metavar="PROJECT",
-        help="Link modules and install requirements from container_configs/PROJECT.txt "
-        "before starting (auto-starts containers if needed)",
+        help="Instance name + project setup: link modules and install requirements "
+        "from container_configs/PROJECT.txt before starting "
+        "(auto-starts containers if needed)",
+    )
+    p.add_argument(
+        "-P",
+        "--port",
+        metavar="PORT",
+        type=int,
+        help=(
+            f"xmlrpc port inside the container "
+            f"(default: {DEFAULT_PORT} for 'default' instance, "
+            f"auto-assigned from {PORT_POOL.start}–{PORT_POOL.stop - 1}"
+            f" for named instances)"
+        ),
     )
     p.add_argument(
         "-i", "--install", nargs="+", metavar="MODULE", help="Modules to install (-i)"
@@ -519,28 +885,67 @@ examples:
     p.set_defaults(func=cmd_start)
 
     # stop
-    p = sub.add_parser("stop", help="Stop the running Odoo process")
-    p.set_defaults(func=cmd_stop)
-
-    # restart
-    p = sub.add_parser("restart", help="Stop then start Odoo")
-    p.add_argument("-d", "--database", metavar="DB")
+    p = sub.add_parser("stop", help="Stop a running Odoo instance")
     p.add_argument(
         "-p",
         "--project",
         metavar="PROJECT",
-        help="Link modules and install requirements before restarting",
+        help="Instance to stop (auto-detected when only one is running)",
     )
-    p.add_argument("-i", "--install", nargs="+", metavar="MODULE")
-    p.add_argument("-u", "--update", nargs="+", metavar="MODULE")
+    p.set_defaults(func=cmd_stop)
+
+    # restart
+    p = sub.add_parser("restart", help="Stop then start Odoo")
+    p.add_argument(
+        "-p",
+        "--project",
+        metavar="PROJECT",
+        help="Instance to restart (auto-detected when only one is running)",
+    )
+    p.add_argument(
+        "-d",
+        "--database",
+        metavar="DB",
+        help="Database to connect to (inferred from PID file if omitted)",
+    )
+    p.add_argument(
+        "-P",
+        "--port",
+        metavar="PORT",
+        type=int,
+        help="xmlrpc port (inferred from PID file if omitted)",
+    )
+    p.add_argument(
+        "-i", "--install", nargs="+", metavar="MODULE", help="Modules to install (-i)"
+    )
+    p.add_argument(
+        "-u", "--update", nargs="+", metavar="MODULE", help="Modules to update (-u)"
+    )
     p.set_defaults(func=cmd_restart)
 
     # status
     p = sub.add_parser("status", help="Show container and Odoo process status")
+    p.add_argument(
+        "-p",
+        "--project",
+        metavar="PROJECT",
+        help=(
+            "Show status for a specific instance (default: show all running instances)"
+        ),
+    )
+    p.add_argument(
+        "--json", action="store_true", help="Output as JSON (agent-friendly)"
+    )
     p.set_defaults(func=cmd_status)
 
     # logs
     p = sub.add_parser("logs", help="Show Odoo process logs")
+    p.add_argument(
+        "-p",
+        "--project",
+        metavar="PROJECT",
+        help="Instance to show logs for (auto-detected when only one is running)",
+    )
     p.add_argument(
         "-n",
         "--lines",
@@ -581,8 +986,9 @@ examples:
         "workon",
         help="Link a project's modules and open a shell in the container",
         description=(
-            "Reads container_configs/PROJECT.txt, creates symlinks in src/private/, "
-            "starts the containers if needed, then opens an interactive bash shell."
+            "Reads container_configs/PROJECT.txt, creates symlinks in"
+            " odoo/auto/addons/, starts the containers if needed,"
+            " then opens an interactive bash shell."
         ),
     )
     p.add_argument(
@@ -595,11 +1001,11 @@ examples:
     # link-modules
     p = sub.add_parser(
         "link-modules",
-        help="Generate symlinks in src/private/ from extra-addons/*/addons.txt",
+        help="Generate symlinks in odoo/auto/addons/ from container_configs/*.txt",
         description=(
             "Reads *.txt files in container_configs/, expands each listed directory "
             "into its immediate subdirectories, and creates relative symlinks in "
-            "odoo/custom/src/private/ so doodba can find them."
+            "odoo/auto/addons/ so doodba can find them."
         ),
     )
     p.add_argument(
@@ -610,8 +1016,8 @@ examples:
     p.add_argument(
         "--clean",
         action="store_true",
-        help="Remove symlinks in src/private/ that point into extra-addons/ "
-        "but are no longer listed in any addons.txt",
+        help="Remove symlinks in odoo/auto/addons/ that point into extra-addons/ "
+        "but are no longer listed in any container_configs/*.txt",
     )
     p.set_defaults(func=cmd_link_modules)
 
