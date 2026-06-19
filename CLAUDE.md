@@ -12,8 +12,11 @@ CLI reference use `/odoo-cli`.
 | `18-0-doodba-db-1`   | `ghcr.io/tecnativa/postgres-autoconf:18-alpine` | PostgreSQL 18                         |
 | `18-0-doodba-smtp-1` | `docker.io/mailhog/mailhog`                     | Fake SMTP (catches all outbound mail) |
 
-Traefik v3.2 reverse proxy runs independently on the `traefik` Docker network. Odoo
-announces itself as `Host('odoo-18.localhost')`.
+Traefik v3.2 reverse proxy runs independently on the `traefik` Docker network. Routing
+is managed by `odoo-cli.py` via the Traefik file provider: each `start` writes a YAML
+file to `~/.traefik/dynamic/` that maps `{instance}.odoo-18.localhost` to the container
+port; each `stop` removes it. Docker labels on the container are disabled
+(`traefik.enable: "false"`).
 
 ## First-time setup after cloning
 
@@ -48,32 +51,19 @@ docker compose build       # rebuild image after Dockerfile / requirements chang
 
 ## Accessing services
 
-| Service                 | URL                                         |
-| ----------------------- | ------------------------------------------- |
-| Odoo (via Traefik)      | http://odoo-18.localhost                    |
-| Odoo `default` instance | http://127.0.0.1:18069                      |
-| Odoo named instances    | http://127.0.0.1:18070 – 18099 †            |
-| DB manager              | http://127.0.0.1:18069/web/database/manager |
-| MailHog                 | http://127.0.0.1:18025                      |
-| PostgreSQL              | `docker compose exec db psql -U odoo`       |
+| Service                       | URL                                         |
+| ----------------------------- | ------------------------------------------- |
+| Odoo default (via Traefik)    | http://odoo-18.localhost                    |
+| Odoo named instance           | http://{instance}.odoo-18.localhost †       |
+| Odoo default (direct)         | http://127.0.0.1:18069                      |
+| Odoo named instances (direct) | http://127.0.0.1:18070 – 18099              |
+| DB manager                    | http://127.0.0.1:18069/web/database/manager |
+| MailHog                       | http://127.0.0.1:18025                      |
+| PostgreSQL                    | `docker compose exec db psql -U odoo`       |
 
-† Named instances use container ports 8070–8099 (auto-assigned). To reach them from the
-host browser, add the matching bindings to `docker-compose.override.yml`:
-
-```yaml
-services:
-  odoo:
-    command:
-      - sleep
-      - infinity
-    ports:
-      - "18070:8070"
-      - "18071:8071"
-      - "18072:8072"
-```
-
-`docker compose exec`-based commands (`shell`, `exec`, `logs`) work without these
-bindings.
+† `odoo-cli.py start` writes the Traefik route automatically and prints the URL. For
+browser access the hostname must be in `/etc/hosts` — the CLI prints the exact
+`sudo tee` command on first start if the entry is missing.
 
 ## Database
 

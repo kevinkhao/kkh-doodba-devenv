@@ -35,10 +35,7 @@ services:
       default:
       traefik:
     labels:
-      traefik.enable: "true"
-      traefik.http.routers.18-0-doodba-odoo.rule: "Host(`odoo-18.localhost`)"
-      traefik.http.services.18-0-doodba-odoo.loadbalancer.server.port: "8069"
-      traefik.docker.network: "traefik"
+      traefik.enable: "false"
     ports:
       - "${PORT_PREFIX:-18}069:8069"
     command:

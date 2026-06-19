@@ -1,0 +1,8 @@
+[addons]
+odoo/custom/extra-addons/enterprise
+odoo/custom/extra-addons/360/smda/custom
+odoo/custom/extra-addons/360/smda/community
+odoo/custom/extra-addons/360/360_community
+odoo/custom/extra-addons/360/360_generic
+[requirements]
+odoo/custom/extra-addons/360/smda/requirements.txt

@@ -1,0 +1,9 @@
+[addons]
+odoo/custom/extra-addons/enterprise
+odoo/custom/extra-addons/360/360_generic
+odoo/custom/extra-addons/360/360_community
+odoo/custom/extra-addons/360/kkt/custom
+odoo/custom/extra-addons/360/kkt/community
+
+[requirements]
+odoo/custom/extra-addons/360/kkt/requirements.txt

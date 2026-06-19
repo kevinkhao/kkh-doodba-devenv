@@ -1,0 +1,10 @@
+[addons]
+odoo/custom/extra-addons/enterprise
+odoo/custom/extra-addons/360/360_generic
+odoo/custom/extra-addons/360/360_community
+odoo/custom/extra-addons/360/fruitopjewerk/custom
+odoo/custom/extra-addons/360/fruitopjewerk/community
+odoo/custom/extra-addons/360/fruitopjewerk/community_old
+
+[requirements]
+odoo/custom/extra-addons/360/fruitopjewerk/requirements.txt

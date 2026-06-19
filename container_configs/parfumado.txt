@@ -1,0 +1,13 @@
+[addons]
+odoo/custom/extra-addons/enterprise
+odoo/custom/extra-addons/360/360_generic
+odoo/custom/extra-addons/360/360_community
+odoo/custom/extra-addons/360/patchworks
+odoo/custom/extra-addons/360/parfumado/custom
+odoo/custom/extra-addons/360/parfumado/community
+
+[setup]
+container_configs/parfumado.sh
+
+[requirements]
+odoo/custom/extra-addons/360/parfumado/requirements.txt
