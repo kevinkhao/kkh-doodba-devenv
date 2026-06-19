@@ -377,7 +377,7 @@ def _setup_project(project):
 
 
 def cmd_start(args):
-    if getattr(args, "project", None):
+    if getattr(args, "project", None) and not getattr(args, "_no_setup", False):
         _setup_project(args.project)
 
     if not _container_running():
@@ -436,9 +436,10 @@ def cmd_stop(args):
 
 
 def cmd_restart(args):
-    instance = getattr(args, "project", None)
+    explicit_project = getattr(args, "project", None)
+    instance = explicit_project
 
-    if not instance:
+    if not explicit_project:
         instances = _list_instances()
         if len(instances) == 0:
             # Nothing running — start fresh as 'default'
@@ -476,6 +477,8 @@ def cmd_restart(args):
         print("Stopped. Waiting for process to exit...")
         time.sleep(2)
 
+    if not explicit_project:
+        args._no_setup = True
     cmd_start(args)
 
 
