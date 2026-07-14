@@ -58,3 +58,11 @@ repo root, or `tree/<branch>/<module>` when branch and path are known. OCA →
 `https://github.com/OCA/<repo>/tree/<branch>/<module>`; 360ERP →
 `https://github.com/360ERP/<repo>/tree/<branch>/<path>`; Odoo core/enterprise → matching
 version branch. If a subfolder path wasn't verified live, flag that it may 404.
+
+## Writing tests
+
+Keep the tests concise and focused on the specific functionality being tested. Use
+descriptive names for test methods and classes to clearly indicate what is being tested.
+Group tests together as much as possible where it makes sense to use a single running
+setup to test multiple related scenarios. Avoid unnecessary duplication of setup code
+across tests.
