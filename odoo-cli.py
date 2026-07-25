@@ -143,16 +143,23 @@ def _host_port(container_port):
 
 
 def _is_running(instance):
-    """Return True if a live Odoo process exists for *instance* inside the container."""
+    """Return True if a live Odoo process exists for *instance* inside the container.
+
+    Checks the recorded PID's /proc cmdline for the recorded port, not just
+    `kill -0` on the PID: containers (and their /tmp) survive `docker compose
+    down`/`up`, so a stale PID file can otherwise match an unrelated process
+    (or thread) that later reused the same PID/TID.
+    """
     pid_file = _pid_file(instance)
-    r = _exec(
-        [
-            "bash",
-            "-c",
-            f"[ -f {pid_file} ] && kill -0 \"$(sed -n '1p' {pid_file})\" 2>/dev/null",
-        ],
-        check=False,
+    script = (
+        f"[ -f {pid_file} ] || exit 1\n"
+        f"pid=$(sed -n '1p' {pid_file})\n"
+        f"port=$(sed -n '3p' {pid_file})\n"
+        f'kill -0 "$pid" 2>/dev/null || exit 1\n'
+        f'[ -z "$port" ] && exit 0\n'
+        f'grep -q -- "--xmlrpc-port=$port" "/proc/$pid/cmdline" 2>/dev/null\n'
     )
+    r = _exec(["bash", "-c", script], check=False)
     if r.returncode == 0:
         return True
     # Migration shim: check legacy /tmp/odoo.pid for the 'default' instance
@@ -209,15 +216,24 @@ def _read_pid_meta(instance):
 
 
 def _list_instances():
-    """Return all live Odoo instances as [{instance, pid, db, port}]."""
+    """Return all live Odoo instances as [{instance, pid, db, port}].
+
+    Verifies each PID's /proc cmdline against its recorded port before
+    counting it as live — see _is_running for why a bare `kill -0` isn't
+    enough once a container has outlived the process that wrote the PID file.
+    """
     script = (
         "for f in /tmp/odoo-*.pid; do\n"
         '    [ -f "$f" ] || continue\n'
         "    pid=$(sed -n '1p' \"$f\")\n"
         '    kill -0 "$pid" 2>/dev/null || continue\n'
+        "    port=$(sed -n '3p' \"$f\")\n"
+        '    if [ -n "$port" ]; then\n'
+        '        grep -q -- "--xmlrpc-port=$port" "/proc/$pid/cmdline" \\\n'
+        "            2>/dev/null || continue\n"
+        "    fi\n"
         '    name=$(basename "$f" .pid); name=${name#odoo-}\n'
         "    db=$(sed -n '2p' \"$f\")\n"
-        "    port=$(sed -n '3p' \"$f\")\n"
         '    echo "$name|$pid|$db|$port"\n'
         "done\n"
     )
@@ -853,11 +869,7 @@ def cmd_link_modules(args):
         sys.exit(1)
     SYMLINK_DIR.mkdir(parents=True, exist_ok=True)
 
-    config_files = sorted(
-        f
-        for f in addons_paths_dir.iterdir()
-        if f.is_file() and not f.name.startswith(".")
-    )
+    config_files = sorted(f for f in addons_paths_dir.iterdir() if f.suffix == ".txt")
     desired, err_collect = _collect_desired(config_files)
     created, skipped, err_apply = _apply_symlinks(desired, SYMLINK_DIR, args.dry_run)
     removed = _clean_stale(desired, SYMLINK_DIR, args.dry_run) if args.clean else 0

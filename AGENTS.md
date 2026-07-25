@@ -2,6 +2,12 @@
 
 # Project context
 
+## Local dev environment
+
+This repo's own Doodba dev loop (starting/restarting Odoo, linking modules, running
+tests) is documented in `CLAUDE.md` and the `/odoo-cli` skill, not here. Read those
+before running `odoo-cli.py` or touching `container_configs/`.
+
 ## Response style
 
 - Terse. No preamble or trailing summaries.
