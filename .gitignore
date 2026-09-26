@@ -3,7 +3,8 @@
 /odoo/custom/src/*/
 !/odoo/custom/src/private/
 
-# Generated symlinks in src/private/ — recreated by `link-modules` command
+# Doodba's global private addons dir; project instances don't use it
+# (odoo-cli.py builds per-instance addons dirs under odoo/auto/instances/)
 /odoo/custom/src/private/*
 !/odoo/custom/src/private/.gitkeep
 
@@ -11,8 +12,9 @@
 /odoo/custom/extra-addons/*/
 !/odoo/custom/extra-addons/.gitkeep
 
-# Claude Code local configuration and worktrees
-/.claude/
+# Claude Code local configuration and worktrees (shared commands are tracked)
+/.claude/*
+!/.claude/commands/
 
 # Ignore docker-compose.yml and overrides by default, to allow easy defaults per clone
 /docker-compose.yml

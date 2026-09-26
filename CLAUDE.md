@@ -149,7 +149,7 @@ python3 odoo-cli.py pip pandas xlrd   # ephemeral; or add to requirements.txt + 
 **Static validation before installing (no DB, seconds not minutes):**
 
 ```bash
-python3 odoo-cli.py check -p myproject   # missing modules, missing pip deps, excludes conflicts
+python3 odoo-cli.py check -p myproject -i my_module   # missing modules/pip deps, excludes conflicts
 ```
 
 ### Running two projects simultaneously

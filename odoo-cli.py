@@ -779,7 +779,9 @@ def cmd_start(args):
             _write_instance_conf(instance)
             flags = ["-c", _instance_conf(instance)] + flags
         if db:
-            flags += ["-d", db]
+            # Serve only this DB, so the instance URL opens it directly instead
+            # of the database selector (the db container also creates `devel`).
+            flags += ["-d", db, f"--db-filter=^{db}$"]
         if getattr(args, "install", None):
             flags += ["-i", ",".join(args.install)]
         if getattr(args, "update", None):
@@ -1075,8 +1077,12 @@ def cmd_workon(args):
 
 def cmd_check(args):
     """Statically validate modules before booting a database (see the comment
-    above _MANIFEST_CHECK_SCRIPT). With -p, checks against the addons path the
-    project's instance would get, using a throwaway environment."""
+    above _MANIFEST_CHECK_SCRIPT).
+
+    -p selects the addons path (the project's, via a throwaway environment;
+    default: the global one). -i selects the modules to check; without it, -p
+    checks every module the project provides.
+    """
     _require_container()
 
     roots = list(args.install or [])
@@ -1086,7 +1092,7 @@ def cmd_check(args):
         desired, err_collect = _collect_desired(_config_file(args.project))
         if err_collect:
             sys.exit(1)
-        roots += sorted(desired)
+        roots = roots or sorted(desired)
         tmp_instance = f".check-{os.getpid()}"
         _build_instance_env(tmp_instance, desired)
         conf = _instance_conf(tmp_instance)
@@ -1094,8 +1100,8 @@ def cmd_check(args):
     roots = sorted(set(roots))
     if not roots:
         print(
-            "ERROR: Provide -p PROJECT (checks every module it would install) "
-            "and/or -i MODULE [MODULE ...]",
+            "ERROR: Provide -i MODULE [MODULE ...] and/or -p PROJECT"
+            " (checks every module the project provides)",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1323,10 +1329,11 @@ examples:
         ),
     )
     add_project(
-        p, "Check every module PROJECT's instance would have, on its addons path"
+        p,
+        "Resolve against PROJECT's addons path; without -i, check all its modules",
     )
     p.add_argument(
-        "-i", "--install", nargs="+", metavar="MODULE", help="Module names to check"
+        "-i", "--install", nargs="+", metavar="MODULE", help="Modules to check"
     )
     p.add_argument("--json", action="store_true", help="Output as JSON")
     p.set_defaults(func=cmd_check)

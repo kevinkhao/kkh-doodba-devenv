@@ -46,8 +46,8 @@ python3 odoo-cli.py exec -p myproject -- odoo -d test_db -u my_module --stop-aft
 python3 odoo-cli.py shell -p myproject          # DB defaults to the instance's
 
 # Static check before installing — no DB, seconds not minutes
-python3 odoo-cli.py check -p myproject
-python3 odoo-cli.py check -i account_ext my_module
+python3 odoo-cli.py check -p myproject -i my_module   # my_module on myproject's path
+python3 odoo-cli.py check -p myproject                # every module myproject provides
 
 # pip install into the container (shared by all instances, ephemeral)
 python3 odoo-cli.py pip pandas xlrd
@@ -158,7 +158,8 @@ Use `workon` for hands-on work. Agents and scripts should use `start -p` / `rest
 --limit-time-real=9999999           no timeout
 --limit-time-real-cron=9999999      no cron timeout
 --xmlrpc-port=PORT                  8069 for 'default', auto-assigned 8070–8099 for named
--c /opt/odoo/auto/instances/<project>/odoo.conf     named instances only
+-c /opt/odoo/auto/instances/<project>/odoo.conf   named instances only
+-d DB --db-filter=^DB$              when -d is given: the instance serves only DB
 ```
 
 Instance logs: `./odoo/auto/odoo-{instance}.log` on the host.
@@ -190,9 +191,10 @@ instance would get (no database, 1–2 seconds) and reports:
 - **Excludes conflicts**: two modules in the set list each other in `excludes` (Odoo's
   install-time check, done statically).
 
-`check -p` uses a throwaway environment, so it never touches a running instance. Without
-`-p` it checks against the global (`default`) addons path. Non-zero exit if anything is
-found.
+`-p` selects the addons path (the project's, via a throwaway environment that never
+touches a running instance; without `-p`, the global `default` path). `-i` selects the
+modules to check; without `-i`, `-p` checks every module the project provides (noisy for
+big repos like Enterprise). Non-zero exit if anything is found.
 
 ---
 
