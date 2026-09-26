@@ -1,0 +1,207 @@
+# Odoo 20 — Local Development Environment
+
+[Tecnativa Doodba](https://github.com/Tecnativa/doodba) architecture. Three Docker
+containers. Odoo is **not** auto-started — managed manually with `odoo-cli.py`. For full
+CLI reference use `/odoo-cli`.
+
+One container hosts several Odoo instances at once (one per `-p PROJECT`). Each instance
+gets its own **instance environment** in `odoo/auto/instances/<project>/`: an `addons/`
+dir with symlinks to exactly the modules in `container_configs/<project>.txt`, and an
+`odoo.conf` whose `addons_path` is that dir plus community addons. Instances never see
+each other's modules, so parallel agents can work on different projects safely. The
+environment is built by `start -p` / `restart -p` / `workon` and removed by `stop`.
+
+## Stack
+
+| Container            | Image                                           | Purpose                               |
+| -------------------- | ----------------------------------------------- | ------------------------------------- |
+| `20-0-doodba-odoo-1` | `20-0-doodba-odoo` (built locally)              | Odoo 20 application                   |
+| `20-0-doodba-db-1`   | `ghcr.io/tecnativa/postgres-autoconf:18-alpine` | PostgreSQL 18                         |
+| `20-0-doodba-smtp-1` | `docker.io/mailhog/mailhog`                     | Fake SMTP (catches all outbound mail) |
+
+Traefik v3.2 reverse proxy runs independently on the `traefik` Docker network. Routing
+is managed by `odoo-cli.py` via the Traefik file provider: each `start` writes a YAML
+file to `~/.traefik/dynamic/` that maps `{instance}.odoo-20.localhost` to the container
+port; each `stop` removes it. Docker labels on the container are disabled
+(`traefik.enable: "false"`).
+
+## First-time setup after cloning
+
+```bash
+# 1. Symlink docker-compose.yml to the dev environment definition
+ln -s devel.yaml docker-compose.yml
+
+# 2. Keep container alive (Odoo is started manually)
+cat > docker-compose.override.yml << 'EOF'
+services:
+  odoo:
+    command:
+      - sleep
+      - infinity
+EOF
+
+# 3. Clone Odoo source (required — image does not bundle it) and Enterprise
+#    (needs SSH access to github.com/odoo/enterprise; list it in container_configs)
+git clone --depth=1 --branch=20.0 https://github.com/odoo/odoo.git odoo/custom/src/odoo
+git clone --depth=1 --branch=20.0 git@github.com:odoo/enterprise.git \
+  odoo/custom/extra-addons/enterprise
+
+# 4. Build and start
+docker compose build
+docker compose up -d
+```
+
+## Stack commands
+
+```bash
+docker compose up -d       # start all containers
+docker compose down        # stop (volumes preserved)
+docker compose build       # rebuild image after Dockerfile / requirements changes
+```
+
+## Accessing services
+
+| Service                       | URL                                         |
+| ----------------------------- | ------------------------------------------- |
+| Odoo default (via Traefik)    | http://odoo-20.localhost                    |
+| Odoo named instance           | http://{instance}.odoo-20.localhost †       |
+| Odoo default (direct)         | http://127.0.0.1:20069                      |
+| Odoo named instances (direct) | http://127.0.0.1:20070 – 20099              |
+| DB manager                    | http://127.0.0.1:20069/web/database/manager |
+| MailHog                       | http://127.0.0.1:20025                      |
+| PostgreSQL                    | `docker compose exec db psql -U odoo`       |
+
+† `odoo-cli.py start` writes the Traefik route automatically and prints the URL. For
+browser access the hostname must be in `/etc/hosts` — the CLI prints the exact
+`sudo tee` command on first start if the entry is missing.
+
+## Database
+
+- Default DB: `devel` (used when no `-d` flag)
+- User: `odoo` / Password: `odoopassword`
+
+## Key files
+
+| File                          | Purpose                                                                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `devel.yaml`                  | Main compose file for dev (symlinked as `docker-compose.yml`)                                                             |
+| `common.yaml`                 | Base service definitions shared across environments                                                                       |
+| `docker-compose.override.yml` | Overrides `command` to `sleep infinity` so Odoo is not auto-started                                                       |
+| `odoo-cli.py`                 | CLI for instances: environments, start/stop, logs, pip, tests                                                             |
+| `odoo/Dockerfile`             | One-liner: `FROM ghcr.io/tecnativa/doodba:20.0-onbuild`                                                                   |
+| `container_configs/`          | One `.txt` per project: `[addons]` dirs (every immediate subdirectory becomes a module), `[requirements]`, `[setup]`      |
+| `odoo/custom/extra-addons/`   | Per-project module trees (arbitrary structure)                                                                            |
+| `odoo/custom/src/`            | `odoo/` (community source). `private/` is doodba's global addons dir, only used by the `default` instance                 |
+| `odoo/auto/`                  | Generated config and logs (rw-mounted, gitignored). `odoo.conf` is doodba's global config, `odoo-<instance>.log` the logs |
+| `odoo/auto/instances/`        | Per-instance environments (`addons/` symlinks + `odoo.conf`), created and removed by `odoo-cli.py`                        |
+| `.env`                        | Sets `COMPOSE_PROJECT_NAME=20-0-doodba` and `PORT_PREFIX=20`                                                              |
+
+## Dev loop
+
+Use `/odoo-cli` for the full CLI reference.
+
+**Session init — run once per session (builds the instance environment, installs pip
+deps, starts Odoo in the background):**
+
+```bash
+python3 odoo-cli.py start -p myproject -d mydb -i my_module
+```
+
+**Iterate — after every code change:**
+
+```bash
+python3 odoo-cli.py restart -u my_module   # DB and port inferred from PID file
+python3 odoo-cli.py restart -i my_module   # re-install after rollback/failure
+```
+
+Changed `container_configs/<project>.txt`? Use `restart -p myproject …` to rebuild the
+environment. `stop -p myproject` ends the session and removes the environment.
+
+**Interactive (developer) — `workon`:**
+
+```bash
+python3 odoo-cli.py workon myproject
+```
+
+Builds the environment and opens a shell in the container. **Odoo is not started**: run
+it yourself in that shell, in the foreground:
+
+```bash
+odoo -d mydb -i my_module   # first install; later: odoo -d mydb -u my_module
+# Ctrl+C stops Odoo; `odoo shell -d mydb` opens a REPL on the same addons
+exit                        # leave; removes the environment if Odoo isn't running
+```
+
+In that shell `odoo` automatically uses the project's addons, the instance port and
+Traefik route, and writes the PID file and log, so `status` / `logs` / `stop` /
+`restart -p myproject` work from another terminal.
+
+**Logs:**
+
+```bash
+python3 odoo-cli.py logs --follow   # live tail (auto-detects instance)
+python3 odoo-cli.py logs -n 50      # last 50 lines
+```
+
+**Missing Python packages:**
+
+```bash
+python3 odoo-cli.py pip pandas xlrd   # ephemeral; or add to requirements.txt + start -p
+```
+
+**Static validation before installing (no DB, seconds not minutes):**
+
+```bash
+python3 odoo-cli.py check -p myproject -i my_module   # missing modules/pip deps, excludes conflicts
+```
+
+### Running two projects simultaneously
+
+```bash
+# Start both instances
+python3 odoo-cli.py start -p project1 -d project1 -i project1_module
+python3 odoo-cli.py start -p project2 -d project2 -i account_ext
+
+# See all running instances with their ports
+python3 odoo-cli.py status
+
+# Target a specific instance for restart / logs / stop
+python3 odoo-cli.py restart -p project1 -u project1_module
+python3 odoo-cli.py logs    -p project2 --follow
+python3 odoo-cli.py stop    -p project1
+```
+
+When only one instance is running, `-p` is optional — commands auto-detect it.
+
+---
+
+## Running tests
+
+Two steps — install first without tests, then run tests separately. Installing with
+`--test-enable` triggers every test in every dependency, which is slow and noisy.
+
+Always pass `-p myproject` to `exec`: it sets `ODOO_RC` to the instance's config (and
+builds the environment if needed). Without it, `odoo` uses doodba's global config and
+won't find the project's modules.
+
+**Step 1 — install on a fresh DB (once):**
+
+```bash
+python3 odoo-cli.py exec -p myproject -- bash -c \
+  "odoo -d test_db -i my_module --stop-after-init --workers=0 --no-http \
+   > /opt/odoo/auto/test-myproject.log 2>&1; echo \"exit: \$?\" >> /opt/odoo/auto/test-myproject.log"
+```
+
+**Step 2 — run target tests (repeatable):**
+
+```bash
+python3 odoo-cli.py exec -p myproject -- bash -c \
+  "odoo --test-enable --test-tags :MyTestClass -d test_db -u my_module \
+   --stop-after-init --workers=0 --no-http \
+   > /opt/odoo/auto/test-myproject.log 2>&1; echo \"exit: \$?\" >> /opt/odoo/auto/test-myproject.log"
+```
+
+- Step 1 uses `-i`; Step 2 uses `-u` — never use `-i` with `--test-enable`
+- Use a dedicated DB with a random name; drop and recreate for a clean slate
+- Read results from `./odoo/auto/test-myproject.log` on the host (one log per project,
+  so parallel agents don't overwrite each other)

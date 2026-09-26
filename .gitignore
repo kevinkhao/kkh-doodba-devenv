@@ -1,0 +1,45 @@
+# Ignore all src directories except private and files with a dot
+/odoo/auto
+/odoo/custom/src/*/
+!/odoo/custom/src/private/
+
+# Doodba's global private addons dir; project instances don't use it
+# (odoo-cli.py builds per-instance addons dirs under odoo/auto/instances/)
+/odoo/custom/src/private/*
+!/odoo/custom/src/private/.gitkeep
+!/odoo/custom/src/private/.editorconfig
+
+# Extra-addons project directories — external repos, never committed here
+/odoo/custom/extra-addons/*/
+!/odoo/custom/extra-addons/.gitkeep
+
+# Claude Code local configuration and worktrees (shared commands are tracked)
+/.claude/*
+!/.claude/commands/
+
+# Ignore docker-compose.yml and overrides by default, to allow easy defaults per clone
+/docker-compose.yml
+/docker-compose.override.yml
+
+# Compiled formats, cache, temporary files, git garbage
+**.~
+**.mo
+**.py[co]
+**.egg-info
+**.orig
+
+# User-specific or editor-specific development files and settings
+.vscode/*
+!/.vscode/*.jinja
+!/.vscode/extensions.json
+!/.vscode/launch.json
+!/.vscode/settings.json
+!/.vscode/tasks.json
+/odoo/custom/src/private/.vscode/*
+/.venv
+/doodba.*.code-workspace
+/src
+.idea/*
+
+# Project-specific docker configurations
+/.docker/
