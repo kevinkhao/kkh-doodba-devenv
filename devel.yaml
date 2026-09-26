@@ -36,6 +36,11 @@ services:
       traefik:
     labels:
       traefik.enable: "false"
+    # Coarse safety net: this one container can host several concurrent Odoo
+    # instances (via odoo-cli.py -p). Without a ceiling, one runaway
+    # install/test run can starve the host and every other instance sharing
+    # it. Not per-instance isolation — just a cap on the container as a whole.
+    mem_limit: 10g
     ports:
       - "${PORT_PREFIX:-18}069:8069"
     command:

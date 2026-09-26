@@ -4,15 +4,16 @@
 #
 # [addons]
 #   Each line is a directory (relative to project root).
-#   Every immediate subdirectory becomes a symlink in odoo/auto/addons/ so
-#   doodba picks it up as an Odoo module. Dot-prefixed dirs (.git, etc.) are
-#   skipped. Later entries override earlier ones when names clash, so list
-#   shared repos first and project-specific overrides last.
+#   Must be under odoo/custom/. Every immediate subdirectory becomes a module
+#   in this project's instance environment (odoo/auto/instances/<project>/addons/),
+#   which is the only custom addons dir that instance sees. Dot-prefixed dirs
+#   (.git, etc.) are skipped. Later entries override earlier ones when names
+#   clash, so list shared repos first and project-specific overrides last.
 #
 # [setup]
 #   Each line is a path to a shell script (relative to project root).
 #   Scripts live in container_configs/ alongside this file.
-#   They are piped to bash inside the container before pip install runs —
+#   They are piped to bash as root inside the container before pip install runs —
 #   use them to install system-level build dependencies (apt-get, etc.).
 #   See EXAMPLE.sh for a template.
 #
