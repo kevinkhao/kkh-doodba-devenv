@@ -948,7 +948,7 @@ def cmd_pip(args):
     _exec(["pip", "install", "--no-cache-dir"] + args.packages)
     print(
         "\nNote: this install is ephemeral (lost on container recreate).\n"
-        "For persistence, add the package to odoo/custom/src/odoo_requirements.txt\n"
+        "For persistence, add it to odoo/custom/dependencies/pip.txt\n"
         "and run: docker compose build"
     )
 
@@ -978,15 +978,17 @@ def cmd_exec(args):
 
 
 # Bash rc for the `workon` shell. ODOO_RC makes every `odoo`/`click-odoo` use the
-# instance's addons. The `odoo()` wrapper additionally gives server runs the
-# instance port and a PID file (so status/logs/stop/restart and Traefik see them);
-# subcommands like `odoo shell` pass straight through.
+# instance's addons. The `odoo()` wrapper gives server runs DEFAULT_FLAGS (before
+# the user's, so theirs win), the instance port, a PID file and the instance log,
+# so status/logs/stop/restart and Traefik see them. Subcommands (`odoo shell`, ...)
+# pass straight through.
 _WORKON_RC_TEMPLATE = """[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
 export ODOO_RC="__CONF__" OPENERP_SERVER="__CONF__"
 PS1="(__INSTANCE__) $PS1"
 odoo() {
     case "${1:-}" in
-        "" | -* | server) ;;
+        server) shift ;;
+        "" | -*) ;;
         *) command odoo "$@"; return ;;
     esac
     if [ ! -f "$ODOO_RC" ]; then
@@ -1001,8 +1003,8 @@ odoo() {
             --database=*) _db="${_args[$_i]#--database=}" ;;
         esac
     done
-    # Output goes to the terminal and to the instance log (for `logs -p`)
-    command odoo "$@" __PORT_FLAG__=__PORT__ > >(tee "__LOGFILE__") 2>&1 &
+    command odoo __DEFAULT_FLAGS__ "$@" __PORT_FLAG__=__PORT__ \
+        > >(tee "__LOGFILE__") 2>&1 &
     local _pid=$!
     printf '%s\\n%s\\n%s\\n' "$_pid" "$_db" "__PORT__" > "__PIDFILE__"
     trap 'kill "$_pid" 2>/dev/null' INT
@@ -1014,23 +1016,57 @@ odoo() {
 }
 cat << 'EOF'
 ────────────────────────────────────────────────────────────────────────────
-workon __INSTANCE__   http://__HOSTNAME__   (container port __PORT__)
+workon __INSTANCE__ → http://__HOSTNAME__   (Odoo is not running yet)
 
-  Modules from container_configs/__INSTANCE__.txt are on the addons path.
-  Nothing is running yet. Start Odoo in the foreground yourself:
+  odoo -d DB -i MODULE    install and serve     Ctrl+C   stop Odoo
+  odoo -d DB -u MODULE    update and serve      exit     leave (cleans up)
+  odoo shell -d DB        REPL on the same addons
 
-      odoo -d DB -i MODULE      first install on DB (creates DB if needed)
-      odoo -d DB -u MODULE      update after code changes
-      odoo -d DB                just serve
-      Ctrl+C                    stop Odoo (stay in the shell)
-      odoo shell -d DB          REPL on the same addons
-      exit                      leave; cleans up if Odoo isn't running
-
-  While Odoo runs here, `odoo-cli.py status|logs|stop|restart -p __INSTANCE__`
-  from another terminal see it. Changed container_configs/__INSTANCE__.txt?
-  Exit and run workon again.
+  Details: python3 odoo-cli.py workon --help
 ────────────────────────────────────────────────────────────────────────────
 EOF
+"""
+
+
+def _workon_help():
+    """Description for `workon --help` (built from this environment's constants)."""
+    dyn = str(TRAEFIK_DYNAMIC_DIR).replace(str(pathlib.Path.home()), "~")
+    host = f"PROJECT.{TRAEFIK_BASE_HOSTNAME}"
+    return f"""\
+Run a project's Odoo by hand and test it in a browser, served by Traefik at
+  http://{host}
+
+workon PROJECT:
+  1. builds the instance environment from container_configs/PROJECT.txt
+     (addons symlinks + odoo.conf), runs [setup] and pip [requirements]
+  2. picks a port ({PORT_POOL.start}-{PORT_POOL.stop - 1}) and writes the Traefik route
+     {dyn}/{_compose_project()}-PROJECT.yml
+  3. opens a bash shell in the odoo container; Odoo is NOT started
+
+In that shell:
+  odoo -d DB -i MODULE   install MODULE (DB is created if missing) and serve
+  odoo -d DB -u MODULE   update MODULE after code changes and serve
+  Ctrl+C                 stop Odoo, keep the shell
+  odoo shell -d DB       Python REPL on the same addons
+  exit                   leave; removes route + environment unless Odoo runs
+
+While Odoo runs, open http://{host}
+(a new DB logs in as admin/admin).
+`odoo` there gets the project's addons, the instance port, the dev flags of
+`start` (auto-reload, one worker; your own flags win), a PID file and the log
+odoo/auto/odoo-PROJECT.log, so from another terminal these work:
+  odoo-cli.py status | logs -p PROJECT -f | restart -p PROJECT | stop -p PROJECT
+
+Changed container_configs/PROJECT.txt? `exit` and run workon again.
+
+Traefik prerequisites (once per machine):
+  - Traefik v3 on the external Docker network "traefik", HTTP on port 80,
+    file provider watching {dyn} (--providers.file.watch=true)
+  - this stack's odoo container on that network (devel.yaml does this)
+  - {host} resolving to 127.0.0.1 (automatic with
+    systemd-resolved or macOS; otherwise workon prints the /etc/hosts line)
+  Inspect routes in the Traefik dashboard (http://127.0.0.1:8080 with
+  --api.insecure).
 """
 
 
@@ -1058,6 +1094,7 @@ def cmd_workon(args):
     rc_file = WORKON_RC.format(instance=instance)
     rc_contents = (
         _WORKON_RC_TEMPLATE.replace("__CONF__", _instance_conf(instance))
+        .replace("__DEFAULT_FLAGS__", " ".join(DEFAULT_FLAGS))
         .replace("__PORT_FLAG__", PORT_FLAG)
         .replace("__PORT__", str(port))
         .replace("__PIDFILE__", _pid_file(instance))
@@ -1163,35 +1200,18 @@ def build_parser():
         description="Manage Odoo instances inside the dev Docker container.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
-examples:
-  # Project instance: build its environment, pip deps, start Odoo in the background
-  python odoo-cli.py start -p myproject -d mydb -i my_module
+examples (python3 odoo-cli.py ...):
+  start -p myproject -d mydb -i my_module   background instance (agents, scripts)
+  restart -u my_module                      after a code change
+  stop -p myproject                         end; removes its environment
+  workon myproject                          interactive shell; see workon --help
+  exec -p myproject -- odoo -d test_db -u my_module --test-enable \\
+      --test-tags :MyTest --stop-after-init --no-http    tests
+  check -p myproject -i my_module           static check, no DB
+  status [--json]                           running instances
+  start -d mydb                             'default' instance, port {DEFAULT_PORT}
 
-  # Dev loop: restart after a code fix (instance, DB and port auto-detected)
-  python odoo-cli.py restart -u my_module
-
-  # Target one of several running instances
-  python odoo-cli.py restart -p samotics -u my_module
-  python odoo-cli.py logs -p samotics --follow
-  python odoo-cli.py stop -p samotics          # also removes its environment
-
-  # Interactive: build the environment and open a shell; run `odoo ...` yourself
-  python odoo-cli.py workon myproject
-
-  # Run tests / one-off commands against an instance's addons
-  python odoo-cli.py exec -p myproject -- odoo -d test_db -u my_module \\
-      --test-enable --test-tags :MyTest --stop-after-init --workers=0 --no-http
-  python odoo-cli.py shell -p myproject
-
-  # Static check before installing (seconds, no DB)
-  python odoo-cli.py check -p myproject
-
-  # Instances and ports / machine-readable
-  python odoo-cli.py status
-  python odoo-cli.py status -p samotics --json
-
-  # Vanilla 'default' instance (port {DEFAULT_PORT}, global odoo.conf, no project)
-  python odoo-cli.py start -d mydb
+Run COMMAND --help for details.
 """,
     )
 
@@ -1303,16 +1323,9 @@ examples:
     # workon
     p = sub.add_parser(
         "workon",
-        help="Build a project's environment and open a shell to run Odoo by hand",
-        description=(
-            "Builds the instance environment from container_configs/PROJECT.txt"
-            " (plus [setup]/[requirements]), registers the Traefik route, and opens"
-            " an interactive shell in the container. Odoo is NOT started: run"
-            " `odoo -d DB -i MODULE` yourself. In that shell `odoo` uses the"
-            " instance's addons and port and writes a PID file, so status/logs/"
-            "stop/restart -p PROJECT work from other terminals. Leaving the shell"
-            " removes the environment unless Odoo is still running."
-        ),
+        help="Open a shell to run a project's Odoo by hand, served via Traefik",
+        description=_workon_help(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("project", metavar="PROJECT", help="container_configs/PROJECT.txt")
     p.set_defaults(func=cmd_workon)
