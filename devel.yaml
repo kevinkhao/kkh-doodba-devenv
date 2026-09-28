@@ -46,14 +46,14 @@ services:
     # zombies. docker-init reaps them.
     init: true
     ports:
-      - "${PORT_PREFIX:-18}069:8069"
+      - "${PORT_PREFIX:-19}069:8069"
     command:
       - odoo
       - --limit-memory-soft=0
       - --limit-time-real-cron=9999999
       - --limit-time-real=9999999
       - --workers=0
-      - --dev=reload,qweb,werkzeug,xml
+      - --dev=reload,qweb,werkzeug,xml,access
 
   db:
     extends:
@@ -77,7 +77,7 @@ services:
     networks:
       default:
     ports:
-      - "127.0.0.1:${PORT_PREFIX:-18}025:8025"
+      - "127.0.0.1:${PORT_PREFIX:-19}025:8025"
 
 networks:
   default:

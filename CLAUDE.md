@@ -1,4 +1,4 @@
-# Odoo 18 — Local Development Environment
+# Odoo 19 — Local Development Environment
 
 [Tecnativa Doodba](https://github.com/Tecnativa/doodba) architecture. Three Docker
 containers. Odoo is **not** auto-started — managed manually with `odoo-cli.py`. For full
@@ -15,13 +15,13 @@ environment is built by `start -p` / `restart -p` / `workon` and removed by `sto
 
 | Container            | Image                                           | Purpose                               |
 | -------------------- | ----------------------------------------------- | ------------------------------------- |
-| `18-0-doodba-odoo-1` | `18-0-doodba-odoo` (built locally)              | Odoo 18 application                   |
-| `18-0-doodba-db-1`   | `ghcr.io/tecnativa/postgres-autoconf:18-alpine` | PostgreSQL 18                         |
-| `18-0-doodba-smtp-1` | `docker.io/mailhog/mailhog`                     | Fake SMTP (catches all outbound mail) |
+| `19-0-doodba-odoo-1` | `19-0-doodba-odoo` (built locally)              | Odoo 19 application                   |
+| `19-0-doodba-db-1`   | `ghcr.io/tecnativa/postgres-autoconf:17-alpine` | PostgreSQL 17                         |
+| `19-0-doodba-smtp-1` | `docker.io/mailhog/mailhog`                     | Fake SMTP (catches all outbound mail) |
 
 Traefik v3.2 reverse proxy runs independently on the `traefik` Docker network. Routing
 is managed by `odoo-cli.py` via the Traefik file provider: each `start` writes a YAML
-file to `~/.traefik/dynamic/` that maps `{instance}.odoo-18.localhost` to the container
+file to `~/.traefik/dynamic/` that maps `{instance}.odoo-19.localhost` to the container
 port; each `stop` removes it. Docker labels on the container are disabled
 (`traefik.enable: "false"`).
 
@@ -40,8 +40,11 @@ services:
       - infinity
 EOF
 
-# 3. Clone Odoo source (required — image does not bundle it)
-git clone --depth=1 --branch=18.0 https://github.com/odoo/odoo.git odoo/custom/src/odoo
+# 3. Clone Odoo source (required — image does not bundle it) and Enterprise
+#    (needs SSH access to github.com/odoo/enterprise; list it in container_configs)
+git clone --depth=1 --branch=19.0 https://github.com/odoo/odoo.git odoo/custom/src/odoo
+git clone --depth=1 --branch=19.0 git@github.com:odoo/enterprise.git \
+  odoo/custom/extra-addons/enterprise
 
 # 4. Build and start
 docker compose build
@@ -60,11 +63,11 @@ docker compose build       # rebuild image after Dockerfile / requirements chang
 
 | Service                    | URL                                                  |
 | -------------------------- | ---------------------------------------------------- |
-| Odoo default (via Traefik) | http://odoo-18.localhost                             |
-| Odoo named instance        | http://{instance}.odoo-18.localhost † (Traefik only) |
-| Odoo default (direct)      | http://127.0.0.1:18069                               |
-| DB manager                 | http://127.0.0.1:18069/web/database/manager          |
-| MailHog                    | http://127.0.0.1:18025                               |
+| Odoo default (via Traefik) | http://odoo-19.localhost                             |
+| Odoo named instance        | http://{instance}.odoo-19.localhost † (Traefik only) |
+| Odoo default (direct)      | http://127.0.0.1:19069                               |
+| DB manager                 | http://127.0.0.1:19069/web/database/manager          |
+| MailHog                    | http://127.0.0.1:19025                               |
 | PostgreSQL                 | `docker compose exec db psql -U odoo`                |
 
 † `start` / `workon` write the Traefik route and print the URL. `*.localhost` resolves
@@ -83,13 +86,13 @@ to 127.0.0.1 via systemd-resolved; otherwise the CLI prints the `/etc/hosts` lin
 | `common.yaml`                 | Base service definitions shared across environments                                                                       |
 | `docker-compose.override.yml` | Overrides `command` to `sleep infinity` so Odoo is not auto-started                                                       |
 | `odoo-cli.py`                 | CLI for instances: environments, start/stop, logs, pip, tests                                                             |
-| `odoo/Dockerfile`             | One-liner: `FROM ghcr.io/tecnativa/doodba:18.0-onbuild`                                                                   |
+| `odoo/Dockerfile`             | One-liner: `FROM ghcr.io/tecnativa/doodba:19.0-onbuild`                                                                   |
 | `container_configs/`          | One `.txt` per project: `[addons]` dirs (every immediate subdirectory becomes a module), `[requirements]`, `[setup]`      |
 | `odoo/custom/extra-addons/`   | Per-project module trees (arbitrary structure)                                                                            |
 | `odoo/custom/src/`            | `odoo/` (community source). `private/` is doodba's global addons dir, only used by the `default` instance                 |
 | `odoo/auto/`                  | Generated config and logs (rw-mounted, gitignored). `odoo.conf` is doodba's global config, `odoo-<instance>.log` the logs |
 | `odoo/auto/instances/`        | Per-instance environments (`addons/` symlinks + `odoo.conf`), created and removed by `odoo-cli.py`                        |
-| `.env`                        | Sets `COMPOSE_PROJECT_NAME=18-0-doodba` and `PORT_PREFIX=18`                                                              |
+| `.env`                        | Sets `COMPOSE_PROJECT_NAME=19-0-doodba` and `PORT_PREFIX=19`                                                              |
 
 ## Dev loop
 
@@ -113,7 +116,7 @@ lists them.
 
 ```bash
 python3 odoo-cli.py workon myproject   # opens a shell in the container; Odoo NOT started
-odoo -d mydb -i my_module              # in that shell: serve at http://myproject.odoo-18.localhost
+odoo -d mydb -i my_module              # in that shell: serve at http://myproject.odoo-19.localhost
                                        # Ctrl+C, edit, `odoo -d mydb -u my_module`; `exit` when done
 ```
 

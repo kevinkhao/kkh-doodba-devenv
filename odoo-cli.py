@@ -109,20 +109,20 @@ PORT_POOL = range(8070, 8100)  # 30 slots for named instances
 
 DEFAULT_FLAGS = [
     "--workers=0",
-    "--dev=reload,qweb,werkzeug,xml",
+    "--dev=reload,qweb,werkzeug,xml,access",
     "--limit-memory-soft=0",
     "--limit-time-real=9999999",
     "--limit-time-real-cron=9999999",
 ]
 
-# Odoo CLI flag used to bind the HTTP port. Odoo 17/18 use --xmlrpc-port;
-# Odoo 19 renamed it to --http-port.
-PORT_FLAG = "--xmlrpc-port"
+# Odoo CLI flag used to bind the HTTP port: --xmlrpc-port up to Odoo 18,
+# --http-port since Odoo 19.
+PORT_FLAG = "--http-port"
 
 # Traefik file provider: one YAML per running instance in TRAEFIK_DYNAMIC_DIR maps
 # {instance}.{base} (or the bare base for 'default') to the instance's port.
 TRAEFIK_DYNAMIC_DIR = pathlib.Path.home() / ".traefik" / "dynamic"
-TRAEFIK_BASE_HOSTNAME = "odoo-18.localhost"
+TRAEFIK_BASE_HOSTNAME = "odoo-19.localhost"
 
 # Host-side flock serializing sequences that must not interleave between
 # concurrent odoo-cli.py runs (e.g. several agents): port assignment + PID file +
@@ -235,7 +235,7 @@ def _log_file(instance):
 
 def _host_port(container_port):
     """Convert a container port to its host-mapped port using PORT_PREFIX from .env."""
-    prefix = "18"
+    prefix = "19"
     env_file = pathlib.Path(PROJECT_DIR) / ".env"
     try:
         for line in env_file.read_text().splitlines():
@@ -244,7 +244,7 @@ def _host_port(container_port):
                 break
     except FileNotFoundError:
         pass
-    # 8069 → 18069, 8070 → 18070, etc.
+    # 8069 → 19069, 8070 → 19070, etc.
     return f"{prefix}{str(container_port)[1:]}"
 
 
@@ -708,7 +708,7 @@ def _compose_project():
 
 
 def _traefik_hostname(instance):
-    """'default' → odoo-18.localhost; 'samotics' → samotics.odoo-18.localhost."""
+    """'default' → odoo-19.localhost; 'samotics' → samotics.odoo-19.localhost."""
     if instance == "default":
         return TRAEFIK_BASE_HOSTNAME
     return f"{instance}.{TRAEFIK_BASE_HOSTNAME}"
@@ -825,9 +825,9 @@ def cmd_start(args):
         odoo_cmd = "odoo " + " ".join(flags)
         launch = (
             f"nohup {odoo_cmd} > {log_file} 2>&1 & "
-            f'_PID=$! && '
+            f"_PID=$! && "
             f'printf "%s\\n%s\\n%s\\n" "$_PID" "{db or ""}" "{port}" > {pid_file} && '
-            f'echo "Odoo instance \'{instance}\' started (PID $_PID, port {port}). '
+            f"echo \"Odoo instance '{instance}' started (PID $_PID, port {port}). "
             f'Logs: {log_file}"'
         )
         _exec(["bash", "-c", launch])

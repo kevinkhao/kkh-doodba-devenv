@@ -43,7 +43,7 @@ Builds the environment, writes the Traefik route and opens a shell in the contai
 **Odoo is not started** — run it yourself:
 
 ```bash
-odoo -d mydb -i my_module   # install and serve → http://myproject.odoo-18.localhost
+odoo -d mydb -i my_module   # install and serve → http://myproject.odoo-19.localhost
                             # (new DB: admin / admin)
 # Ctrl+C, edit code, then:
 odoo -d mydb -u my_module   # update and serve
@@ -101,12 +101,12 @@ See `container_configs/EXAMPLE.txt` and `EXAMPLE.sh`.
 
 | Instance  | Container port   | URL                                                |
 | --------- | ---------------- | -------------------------------------------------- |
-| `default` | 8069             | http://odoo-18.localhost or http://127.0.0.1:18069 |
-| named     | 8070–8099 (auto) | http://{project}.odoo-18.localhost (Traefik only)  |
+| `default` | 8069             | http://odoo-19.localhost or http://127.0.0.1:19069 |
+| named     | 8070–8099 (auto) | http://{project}.odoo-19.localhost (Traefik only)  |
 
 `start` runs Odoo with `-c <instance odoo.conf>`, `--workers=0`,
-`--dev=reload,qweb,werkzeug,xml`, no time/memory limits, `--xmlrpc-port=PORT` and, with
-`-d DB`, `--db-filter=^DB$` (the URL opens DB directly). Logs:
+`--dev=reload,qweb,werkzeug,xml,access`, no time/memory limits, `--http-port=PORT` and,
+with `-d DB`, `--db-filter=^DB$` (the URL opens DB directly). Logs:
 `./odoo/auto/odoo-{instance}.log`.
 
 ## `check`

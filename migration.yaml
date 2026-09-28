@@ -16,7 +16,7 @@ services:
       SMTP_SERVER: smtplocal
       # Just in case you use queue_job
       ODOO_QUEUE_JOB_CHANNELS: "root:1"
-      PGHOST: 18-0-doodba-18-0-test-db
+      PGHOST: 19-0-doodba-19-0-test-db
     restart: unless-stopped
     depends_on:
       - db
@@ -36,13 +36,13 @@ services:
       file: common.yaml
       service: db
     environment:
-      DB_HOST: 18-0-doodba-18-0-test-db
+      DB_HOST: 19-0-doodba-19-0-test-db
     env_file:
       - .docker/db-creation.env
     networks:
       default:
         aliases:
-          - "18-0-doodba-18-0-test-db"
+          - "19-0-doodba-19-0-test-db"
     restart: unless-stopped
 
   smtp:

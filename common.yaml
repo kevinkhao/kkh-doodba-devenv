@@ -3,8 +3,8 @@ services:
     build:
       context: ./odoo
       args:
-        DB_VERSION: "18"
-        ODOO_VERSION: "18.0"
+        DB_VERSION: "17"
+        ODOO_VERSION: "19.0"
         UID: "${UID:-1000}"
         GID: "${GID:-1000}"
     environment:
@@ -17,7 +17,7 @@ services:
       - filestore:/var/lib/odoo
 
   db:
-    image: ghcr.io/tecnativa/postgres-autoconf:18-alpine
+    image: ghcr.io/tecnativa/postgres-autoconf:17-alpine
     shm_size: 4gb
     environment:
       POSTGRES_DB: *dbname
