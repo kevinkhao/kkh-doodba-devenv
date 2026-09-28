@@ -14,21 +14,21 @@ odoo_listdb: true
 odoo_listdb_staging: true
 odoo_oci_image: ""
 odoo_proxy: traefik
-odoo_version: 18.0
+odoo_version: 17.0
 paths_with_crawlers: null
 paths_without_crawlers: null
 postgres_dbname: doodba-db-main
 postgres_exposed: true
 postgres_username: odoo
-postgres_version: "18"
+postgres_version: "16"
 project_author: kkh
 project_license: no_license
-project_name: 18.0-doodba
+project_name: 17.0-doodba
 smtp_default_from: ""
 smtp_relay_host: ""
 traefik_version: 3
 use_refurb: false
-whitelist_docker_project_devel: 18-0-doodba
+whitelist_docker_project_devel: 17-0-doodba
 whitelisted_hosts_devel:
   - cdnjs.cloudflare.com
   - fonts.googleapis.com

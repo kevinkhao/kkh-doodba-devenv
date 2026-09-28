@@ -13,7 +13,7 @@ services:
       INITIAL_LANG: "en_US"
       LIST_DB: "true"
       ODOO_BUS_PUBLIC_SAMESITE_WS: 1
-      PGHOST: 18-0-doodba-18-0-prod-db
+      PGHOST: 17-0-doodba-17-0-prod-db
     depends_on:
       - db
     networks:
@@ -26,23 +26,23 @@ services:
       file: common.yaml
       service: db
     environment:
-      DB_HOST: 18-0-doodba-18-0-prod-db
+      DB_HOST: 17-0-doodba-17-0-prod-db
     env_file:
       - .docker/db-creation.env
     restart: unless-stopped
     networks:
       default:
         aliases:
-          - "18-0-doodba-18-0-prod-db"
+          - "17-0-doodba-17-0-prod-db"
       inverseproxy_shared:
     labels:
       traefik.enable: "true"
       traefik.docker.network: "inverseproxy_shared"
-      traefik.tcp.routers.18-0-doodba-18-0-prod-database.entrypoints: postgres-entrypoint
-      traefik.tcp.services.18-0-doodba-18-0-prod-database.loadbalancer.server.port: 5432
-      traefik.tcp.routers.18-0-doodba-18-0-prod-database.tls: "true"
-      traefik.tcp.routers.18-0-doodba-18-0-prod-database.tls.certResolver: letsencrypt
-      traefik.tcp.routers.18-0-doodba-18-0-prod-database.rule:
+      traefik.tcp.routers.17-0-doodba-17-0-prod-database.entrypoints: postgres-entrypoint
+      traefik.tcp.services.17-0-doodba-17-0-prod-database.loadbalancer.server.port: 5432
+      traefik.tcp.routers.17-0-doodba-17-0-prod-database.tls: "true"
+      traefik.tcp.routers.17-0-doodba-17-0-prod-database.tls.certResolver: letsencrypt
+      traefik.tcp.routers.17-0-doodba-17-0-prod-database.rule:
 
 networks:
   default:

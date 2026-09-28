@@ -7,10 +7,11 @@
 # (odoo-cli.py builds per-instance addons dirs under odoo/auto/instances/)
 /odoo/custom/src/private/*
 !/odoo/custom/src/private/.gitkeep
+!/odoo/custom/src/private/.editorconfig
 
 # Extra-addons project directories — external repos, never committed here
-/odoo/custom/extra-addons/*/
-!/odoo/custom/extra-addons/.gitkeep
+/odoo/extra-addons/*/
+!/odoo/extra-addons/.gitkeep
 
 # Claude Code local configuration and worktrees (shared commands are tracked)
 /.claude/*

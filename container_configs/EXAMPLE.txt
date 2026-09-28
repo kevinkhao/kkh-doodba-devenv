@@ -4,7 +4,7 @@
 #
 # [addons]
 #   Each line is a directory (relative to project root).
-#   Must be under odoo/custom/. Every immediate subdirectory becomes a module
+#   Must be under odoo/custom/ or odoo/extra-addons/. Every immediate subdirectory becomes a module
 #   in this project's instance environment (odoo/auto/instances/<project>/addons/),
 #   which is the only custom addons dir that instance sees. Dot-prefixed dirs
 #   (.git, etc.) are skipped. Later entries override earlier ones when names
@@ -19,7 +19,7 @@
 #
 # [requirements]
 #   Each line is a path to a requirements.txt (relative to project root).
-#   Must be under odoo/custom/ (the bind-mounted volume).
+#   Must be under odoo/custom/ or odoo/extra-addons/ (the bind-mounted volume).
 #   `workon` / `start -p` runs `pip install -r` for each one.
 #
 # Usage:
@@ -27,13 +27,13 @@
 #   python3 odoo-cli.py start -p EXAMPLE -d mydb
 
 [addons]
-# odoo/custom/extra-addons/360/360_generic
-# odoo/custom/extra-addons/360/360_community
-# odoo/custom/extra-addons/360/my_project/custom
-# odoo/custom/extra-addons/360/my_project/community
+# odoo/extra-addons/360/360_generic
+# odoo/extra-addons/360/360_community
+# odoo/extra-addons/360/my_project/custom
+# odoo/extra-addons/360/my_project/community
 
 [setup]
 # container_configs/EXAMPLE.sh
 
 [requirements]
-# odoo/custom/extra-addons/360/my_project/requirements.txt
+# odoo/extra-addons/360/my_project/requirements.txt

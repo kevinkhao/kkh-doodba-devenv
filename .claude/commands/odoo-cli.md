@@ -43,7 +43,7 @@ Builds the environment, writes the Traefik route and opens a shell in the contai
 **Odoo is not started** — run it yourself:
 
 ```bash
-odoo -d mydb -i my_module   # install and serve → http://myproject.odoo-18.localhost
+odoo -d mydb -i my_module   # install and serve → http://myproject.odoo-17.localhost
                             # (new DB: admin / admin)
 # Ctrl+C, edit code, then:
 odoo -d mydb -u my_module   # update and serve
@@ -84,12 +84,12 @@ The `default` instance (no `-p`) uses doodba's global addons (community +
 ## `container_configs/<project>.txt`
 
 ```
-[addons]                                      # dirs under odoo/custom/; each immediate
-odoo/custom/extra-addons/360/360_community    # subdirectory is a module; later entries
-odoo/custom/extra-addons/my_project/custom    # win on name clashes
+[addons]                                      # dirs under odoo/custom/ or odoo/extra-addons/; each immediate
+odoo/extra-addons/360/360_community    # subdirectory is a module; later entries
+odoo/extra-addons/my_project/custom    # win on name clashes
 
-[requirements]                                # pip install -r (under odoo/custom/)
-odoo/custom/extra-addons/my_project/requirements.txt
+[requirements]                                # pip install -r (under odoo/custom/ or odoo/extra-addons/)
+odoo/extra-addons/my_project/requirements.txt
 
 [setup]                                       # bash scripts run as root before pip
 container_configs/my_project.sh
@@ -101,8 +101,8 @@ See `container_configs/EXAMPLE.txt` and `EXAMPLE.sh`.
 
 | Instance  | Container port   | URL                                                |
 | --------- | ---------------- | -------------------------------------------------- |
-| `default` | 8069             | http://odoo-18.localhost or http://127.0.0.1:18069 |
-| named     | 8070–8099 (auto) | http://{project}.odoo-18.localhost (Traefik only)  |
+| `default` | 8069             | http://odoo-17.localhost or http://127.0.0.1:17069 |
+| named     | 8070–8099 (auto) | http://{project}.odoo-17.localhost (Traefik only)  |
 
 `start` runs Odoo with `-c <instance odoo.conf>`, `--workers=0`,
 `--dev=reload,qweb,werkzeug,xml`, no time/memory limits, `--xmlrpc-port=PORT` and, with

@@ -20,7 +20,8 @@ before running `odoo-cli.py` or touching `container_configs/`.
 - Never use the em dash ("—"). Use a comma, colon, parentheses, or a period instead.
 - Answer from general Odoo knowledge first. Read source only when asked or when exact
   names are needed for a paste-ready deliverable.
-- Ask for the Odoo version once per session if not stated (supported: 17.0, 18.0, 19.0).
+- Ask for the Odoo version once per session if not stated (supported: 17.0, 18.0, 19.0,
+  20.0).
 
 ## Version control
 
@@ -34,7 +35,7 @@ before running `odoo-cli.py` or touching `container_configs/`.
 
 ## Source repositories (browse on GitHub by version branch)
 
-- Odoo Community + base addons: github.com/odoo/odoo, branch 17.0 / 18.0 / 19.0.
+- Odoo Community + base addons: github.com/odoo/odoo, branch 17.0 / 18.0 / 19.0 / 20.0.
 - Odoo Enterprise: github.com/odoo/enterprise, matching version branch (private,
   requires access).
 - Odoo developer documentation: github.com/odoo/documentation, matching version branch,
