@@ -135,16 +135,22 @@ def _container_running():
 def _ensure_container():
     """Start the containers if needed and wait for the doodba entrypoint to finish.
 
-    The entrypoint links the global addons and writes BASE_CONF before exec'ing
-    the container command, so until PID 1 stops being the entrypoint, BASE_CONF
-    may be missing or stale.
+    The entrypoint (a Python script) links the global addons and writes BASE_CONF
+    before exec'ing the container command, so while it runs BASE_CONF may be
+    missing or stale. The pattern skips docker-init (`init: true`), whose
+    cmdline also names the entrypoint.
     """
     if not _container_running():
         print("Starting containers...")
         subprocess.run(COMPOSE + ["up", "-d"], check=True)
     for _ in range(120):
         r = _exec(
-            ["bash", "-c", "grep -q entrypoint /proc/1/cmdline || echo ready"],
+            [
+                "bash",
+                "-c",
+                "pgrep -f '^[^ ]*python[^ ]* /opt/odoo/common/entrypoint'"
+                " >/dev/null || echo ready",
+            ],
             capture=True,
             check=False,
         )
@@ -409,11 +415,11 @@ def _remove_instance_env(instance):
 
 
 def _odoo_env(instance):
-    """Environment variables that make any `odoo`/`click-odoo` invocation in the
-    container use *instance*'s config (ODOO_RC takes precedence over the image's
-    OPENERP_SERVER; both are set to be explicit)."""
-    conf = _instance_conf(instance)
-    return {"ODOO_RC": conf, "OPENERP_SERVER": conf}
+    """Environment that makes any `odoo`/`click-odoo` invocation in the container
+    use *instance*'s config. ODOO_RC takes precedence over the image's
+    OPENERP_SERVER (Odoo 18); also setting OPENERP_SERVER makes Odoo 20+ log a
+    deprecation warning."""
+    return {"ODOO_RC": _instance_conf(instance)}
 
 
 def _ensure_instance_env(instance):
@@ -983,7 +989,7 @@ def cmd_exec(args):
 # so status/logs/stop/restart and Traefik see them. Subcommands (`odoo shell`, ...)
 # pass straight through.
 _WORKON_RC_TEMPLATE = """[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
-export ODOO_RC="__CONF__" OPENERP_SERVER="__CONF__"
+export ODOO_RC="__CONF__"
 PS1="(__INSTANCE__) $PS1"
 odoo() {
     case "${1:-}" in
@@ -1003,11 +1009,19 @@ odoo() {
             --database=*) _db="${_args[$_i]#--database=}" ;;
         esac
     done
-    command odoo __DEFAULT_FLAGS__ "$@" __PORT_FLAG__=__PORT__ \
-        > >(tee "__LOGFILE__") 2>&1 &
+    local _filter=()
+    [ -n "$_db" ] && _filter=("--db-filter=^${_db}$")
+    # Odoo writes to the instance log; `tail` shows it here without becoming a
+    # child of Odoo (which would make Odoo warn about it on shutdown).
+    command odoo __DEFAULT_FLAGS__ "${_filter[@]}" "$@" __PORT_FLAG__=__PORT__ \
+        > "__LOGFILE__" 2>&1 &
     local _pid=$!
     printf '%s\\n%s\\n%s\\n' "$_pid" "$_db" "__PORT__" > "__PIDFILE__"
     trap 'kill "$_pid" 2>/dev/null' INT
+    # Ctrl+C only reaches the foreground `tail`; once it ends, stop Odoo too
+    # (no-op if Odoo already exited, e.g. with --stop-after-init).
+    tail -n +1 -f --pid="$_pid" "__LOGFILE__"
+    kill "$_pid" 2>/dev/null
     wait "$_pid"; local _rc=$?
     trap - INT
     # Only remove the PID file if it is still ours (restart may have replaced it)

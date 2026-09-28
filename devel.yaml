@@ -41,6 +41,10 @@ services:
     # install/test run can starve the host and every other instance sharing
     # it. Not per-instance isolation — just a cap on the container as a whole.
     mem_limit: 10g
+    # PID 1 is `sleep infinity` (docker-compose.override.yml), which never reaps
+    # orphans; stopped Odoo instances and test browsers would pile up as
+    # zombies. docker-init reaps them.
+    init: true
     ports:
       - "${PORT_PREFIX:-20}069:8069"
     command:
